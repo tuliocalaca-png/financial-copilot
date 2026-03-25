@@ -35,30 +35,31 @@ function extractIncomingMessage(payload: unknown): ExtractedWebhookPayload | nul
 
   const body = payload as Record<string, unknown>;
 
+  // formato simplificado (testes locais)
   const directMessage =
     typeof body.messageText === "string"
       ? body.messageText
       : typeof body.message === "string"
-        ? body.message
-        : typeof body.text === "string"
-          ? body.text
-          : null;
+      ? body.message
+      : typeof body.text === "string"
+      ? body.text
+      : null;
 
   const directPhone =
     typeof body.phoneNumber === "string"
       ? body.phoneNumber
       : typeof body.phone === "string"
-        ? body.phone
-        : typeof body.from === "string"
-          ? body.from
-          : null;
+      ? body.phone
+      : typeof body.from === "string"
+      ? body.from
+      : null;
 
   const directMessageId =
     typeof body.messageId === "string"
       ? body.messageId
       : typeof body.id === "string"
-        ? body.id
-        : undefined;
+      ? body.id
+      : undefined;
 
   if (directMessage && directPhone) {
     return {
@@ -70,7 +71,7 @@ function extractIncomingMessage(payload: unknown): ExtractedWebhookPayload | nul
     };
   }
 
-  // WhatsApp Cloud API structure
+  // estrutura oficial WhatsApp Cloud API
   const entry = Array.isArray(body.entry) ? body.entry[0] : null;
   const changes =
     entry && typeof entry === "object"
@@ -92,8 +93,11 @@ function extractIncomingMessage(payload: unknown): ExtractedWebhookPayload | nul
   }
 
   const messageRecord = messageItem as Record<string, unknown>;
+
   const from = messageRecord.from;
-  const messageId = typeof messageRecord.id === "string" ? messageRecord.id : undefined;
+  const messageId =
+    typeof messageRecord.id === "string" ? messageRecord.id : undefined;
+
   const textObj = messageRecord.text;
   const textBody =
     textObj && typeof textObj === "object"
@@ -113,8 +117,11 @@ function extractIncomingMessage(payload: unknown): ExtractedWebhookPayload | nul
   return null;
 }
 
-export async function registerWhatsappWebhookRoute(app: FastifyInstance): Promise<void> {
-  // Verificação do webhook da Meta
+export async function registerWhatsappWebhookRoute(
+  app: FastifyInstance
+): Promise<void> {
+
+  // 🔹 Verificação do webhook (Meta)
   app.get("/webhook/whatsapp", async (request, reply) => {
     const query = request.query as Record<string, string | undefined>;
 
@@ -129,21 +136,21 @@ export async function registerWhatsappWebhookRoute(app: FastifyInstance): Promis
     return reply.status(403).send("Forbidden");
   });
 
-  // Recebimento de mensagens
+  // 🔹 Receber mensagens
   app.post("/webhook/whatsapp", async (request, reply) => {
     try {
       cleanupProcessedMessageIds();
 
       const extracted = extractIncomingMessage(request.body);
 
-      // Ignora eventos que não são mensagens de usuário
+      // ignora eventos que não são mensagem
       if (!extracted) {
         return reply.status(200).send({ ok: true, ignored: true });
       }
 
       const { incoming, messageId } = extracted;
 
-      // Deduplicação básica para evitar resposta dupla
+      // 🔹 evita resposta duplicada (Meta envia duplicado às vezes)
       if (messageId) {
         if (processedMessageIds.has(messageId)) {
           return reply.status(200).send({ ok: true, duplicate: true });
@@ -154,7 +161,9 @@ export async function registerWhatsappWebhookRoute(app: FastifyInstance): Promis
 
       const userId = await getOrCreateUserByPhone(incoming.phoneNumber);
 
+      // 🚨 SEMPRE tenta parsear (não depende de intent)
       const parsedExpense = parseExpense(incoming.messageText);
+
       const intent = parsedExpense ? "expense" : "unknown";
 
       await saveMessageEvent({
@@ -164,20 +173,16 @@ export async function registerWhatsappWebhookRoute(app: FastifyInstance): Promis
         intent
       });
 
-      let dailyLimit:
-        | Awaited<ReturnType<typeof calculateDailyLimit>>
-        | undefined;
-
+      // 🚨 Só salva se parseou corretamente
       if (parsedExpense) {
         await saveExpense(userId, parsedExpense);
-        dailyLimit = await calculateDailyLimit(userId);
       }
 
+      // 🚨 NÃO usamos dailyLimit na resposta (evita lixo)
       const responseText = await generateAssistantReply({
         intent,
         originalMessage: incoming.messageText,
-        parsedExpense: parsedExpense ?? undefined,
-        dailyLimit
+        parsedExpense: parsedExpense ?? undefined
       });
 
       await sendWhatsappMessage(incoming.phoneNumber, responseText);
@@ -190,8 +195,10 @@ export async function registerWhatsappWebhookRoute(app: FastifyInstance): Promis
       });
 
       return reply.status(200).send({ ok: true });
+
     } catch (error) {
       request.log.error(error);
+
       return reply.status(500).send({
         error: "Internal server error"
       });
