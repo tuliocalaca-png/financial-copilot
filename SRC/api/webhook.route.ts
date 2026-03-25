@@ -1,5 +1,4 @@
 import { FastifyInstance } from "fastify";
-import { IncomingMessage } from "../core/types";
 import { sendWhatsappMessage } from "../integrations/whatsapp.client";
 import { parseExpense } from "../services/expense-parser.service";
 import { generateAssistantReply } from "../services/openai.service";
@@ -9,7 +8,30 @@ import {
   saveMessageEvent
 } from "../services/persistence.service";
 
-function extractIncomingMessage(payload: unknown): IncomingMessage | null {
+type IncomingMessage = {
+  phoneNumber: string;
+  messageText: string;
+};
+
+type ExtractedWebhookPayload = {
+  incoming: IncomingMessage;
+  messageId?: string;
+};
+
+const processedMessageIds = new Map<string, number>();
+const PROCESSED_TTL_MS = 10 * 60 * 1000;
+
+function cleanupProcessedMessageIds(): void {
+  const now = Date.now();
+
+  for (const [messageId, timestamp] of processedMessageIds.entries()) {
+    if (now - timestamp > PROCESSED_TTL_MS) {
+      processedMessageIds.delete(messageId);
+    }
+  }
+}
+
+function extractIncomingMessage(payload: unknown): ExtractedWebhookPayload | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }
@@ -20,22 +42,35 @@ function extractIncomingMessage(payload: unknown): IncomingMessage | null {
     typeof body.messageText === "string"
       ? body.messageText
       : typeof body.message === "string"
-      ? body.message
-      : typeof body.text === "string"
-      ? body.text
-      : null;
+        ? body.message
+        : typeof body.text === "string"
+          ? body.text
+          : null;
 
   const directPhone =
     typeof body.phoneNumber === "string"
       ? body.phoneNumber
       : typeof body.phone === "string"
-      ? body.phone
-      : typeof body.from === "string"
-      ? body.from
-      : null;
+        ? body.phone
+        : typeof body.from === "string"
+          ? body.from
+          : null;
+
+  const directMessageId =
+    typeof body.messageId === "string"
+      ? body.messageId
+      : typeof body.id === "string"
+        ? body.id
+        : undefined;
 
   if (directMessage && directPhone) {
-    return { messageText: directMessage, phoneNumber: directPhone };
+    return {
+      incoming: {
+        messageText: directMessage,
+        phoneNumber: directPhone
+      },
+      messageId: directMessageId
+    };
   }
 
   const entry = Array.isArray(body.entry) ? body.entry[0] : null;
@@ -58,50 +93,81 @@ function extractIncomingMessage(payload: unknown): IncomingMessage | null {
     return null;
   }
 
-  const from = (messageItem as Record<string, unknown>).from;
-  const textObj = (messageItem as Record<string, unknown>).text;
+  const messageRecord = messageItem as Record<string, unknown>;
+  const from = messageRecord.from;
+  const messageId =
+    typeof messageRecord.id === "string" ? messageRecord.id : undefined;
+
+  const textObj = messageRecord.text;
   const textBody =
     textObj && typeof textObj === "object"
       ? (textObj as Record<string, unknown>).body
       : null;
 
   if (typeof from === "string" && typeof textBody === "string") {
-    return { phoneNumber: from, messageText: textBody };
+    return {
+      incoming: {
+        phoneNumber: from,
+        messageText: textBody
+      },
+      messageId
+    };
   }
 
   return null;
 }
 
-export async function registerWhatsappWebhookRoute(app: FastifyInstance): Promise<void> {
+function isCategoryQuery(text: string): boolean {
+  const normalized = text.toLowerCase();
 
-  // webhook verify
+  return (
+    normalized.includes("categoria") ||
+    normalized.includes("categorias") ||
+    normalized.includes("separado por categoria") ||
+    normalized.includes("por categoria")
+  );
+}
+
+export async function registerWhatsappWebhookRoute(
+  app: FastifyInstance
+): Promise<void> {
   app.get("/webhook/whatsapp", async (request, reply) => {
-    const query = request.query as any;
+    const query = request.query as Record<string, string | undefined>;
 
     const mode = query["hub.mode"];
     const token = query["hub.verify_token"];
     const challenge = query["hub.challenge"];
 
     if (mode === "subscribe" && token === "meu_token_123") {
-      return reply.type("text/plain").send(challenge);
+      return reply.type("text/plain").send(challenge ?? "");
     }
 
     return reply.status(403).send("Forbidden");
   });
 
-  // receive messages
   app.post("/webhook/whatsapp", async (request, reply) => {
     try {
-      const incoming = extractIncomingMessage(request.body);
+      cleanupProcessedMessageIds();
 
-      if (!incoming) {
-        return reply.status(200).send({ ok: true });
+      const extracted = extractIncomingMessage(request.body);
+
+      if (!extracted) {
+        return reply.status(200).send({ ok: true, ignored: true });
+      }
+
+      const { incoming, messageId } = extracted;
+
+      if (messageId) {
+        if (processedMessageIds.has(messageId)) {
+          return reply.status(200).send({ ok: true, duplicate: true });
+        }
+
+        processedMessageIds.set(messageId, Date.now());
       }
 
       const userId = await getOrCreateUserByPhone(incoming.phoneNumber);
 
       const parsedExpense = parseExpense(incoming.messageText);
-
       const intent = parsedExpense ? "expense" : "unknown";
 
       await saveMessageEvent({
@@ -113,6 +179,24 @@ export async function registerWhatsappWebhookRoute(app: FastifyInstance): Promis
 
       if (parsedExpense) {
         await saveExpense(userId, parsedExpense);
+      }
+
+      // Regra dura: ainda não temos visão confiável por categoria
+      if (isCategoryQuery(incoming.messageText)) {
+        const responseText =
+          "Ainda não consigo separar por categoria com segurança 👀\n\n" +
+          "Mas posso te mostrar isso quando essa visão estiver pronta 👍";
+
+        await sendWhatsappMessage(incoming.phoneNumber, responseText);
+
+        await saveMessageEvent({
+          userId,
+          direction: "outbound",
+          messageText: responseText,
+          intent: "unknown"
+        });
+
+        return reply.status(200).send({ ok: true });
       }
 
       const responseText = await generateAssistantReply({
@@ -131,9 +215,9 @@ export async function registerWhatsappWebhookRoute(app: FastifyInstance): Promis
       });
 
       return reply.status(200).send({ ok: true });
-
     } catch (error) {
       request.log.error(error);
+
       return reply.status(500).send({
         error: "Internal server error"
       });
