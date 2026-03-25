@@ -1,7 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { IncomingMessage } from "../core/types";
 import { sendWhatsappMessage } from "../integrations/whatsapp.client";
-import { calculateDailyLimit } from "../services/daily-limit.service";
 import { parseExpense } from "../services/expense-parser.service";
 import { generateAssistantReply } from "../services/openai.service";
 import {
@@ -10,32 +9,13 @@ import {
   saveMessageEvent
 } from "../services/persistence.service";
 
-type ExtractedWebhookPayload = {
-  incoming: IncomingMessage;
-  messageId?: string;
-};
-
-const processedMessageIds = new Map<string, number>();
-const PROCESSED_TTL_MS = 10 * 60 * 1000;
-
-function cleanupProcessedMessageIds(): void {
-  const now = Date.now();
-
-  for (const [messageId, timestamp] of processedMessageIds.entries()) {
-    if (now - timestamp > PROCESSED_TTL_MS) {
-      processedMessageIds.delete(messageId);
-    }
-  }
-}
-
-function extractIncomingMessage(payload: unknown): ExtractedWebhookPayload | null {
+function extractIncomingMessage(payload: unknown): IncomingMessage | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }
 
   const body = payload as Record<string, unknown>;
 
-  // formato simplificado (testes locais)
   const directMessage =
     typeof body.messageText === "string"
       ? body.messageText
@@ -54,24 +34,10 @@ function extractIncomingMessage(payload: unknown): ExtractedWebhookPayload | nul
       ? body.from
       : null;
 
-  const directMessageId =
-    typeof body.messageId === "string"
-      ? body.messageId
-      : typeof body.id === "string"
-      ? body.id
-      : undefined;
-
   if (directMessage && directPhone) {
-    return {
-      incoming: {
-        messageText: directMessage,
-        phoneNumber: directPhone
-      },
-      messageId: directMessageId
-    };
+    return { messageText: directMessage, phoneNumber: directPhone };
   }
 
-  // estrutura oficial WhatsApp Cloud API
   const entry = Array.isArray(body.entry) ? body.entry[0] : null;
   const changes =
     entry && typeof entry === "object"
@@ -92,76 +58,48 @@ function extractIncomingMessage(payload: unknown): ExtractedWebhookPayload | nul
     return null;
   }
 
-  const messageRecord = messageItem as Record<string, unknown>;
-
-  const from = messageRecord.from;
-  const messageId =
-    typeof messageRecord.id === "string" ? messageRecord.id : undefined;
-
-  const textObj = messageRecord.text;
+  const from = (messageItem as Record<string, unknown>).from;
+  const textObj = (messageItem as Record<string, unknown>).text;
   const textBody =
     textObj && typeof textObj === "object"
       ? (textObj as Record<string, unknown>).body
       : null;
 
   if (typeof from === "string" && typeof textBody === "string") {
-    return {
-      incoming: {
-        phoneNumber: from,
-        messageText: textBody
-      },
-      messageId
-    };
+    return { phoneNumber: from, messageText: textBody };
   }
 
   return null;
 }
 
-export async function registerWhatsappWebhookRoute(
-  app: FastifyInstance
-): Promise<void> {
+export async function registerWhatsappWebhookRoute(app: FastifyInstance): Promise<void> {
 
-  // 🔹 Verificação do webhook (Meta)
+  // webhook verify
   app.get("/webhook/whatsapp", async (request, reply) => {
-    const query = request.query as Record<string, string | undefined>;
+    const query = request.query as any;
 
     const mode = query["hub.mode"];
     const token = query["hub.verify_token"];
     const challenge = query["hub.challenge"];
 
     if (mode === "subscribe" && token === "meu_token_123") {
-      return reply.type("text/plain").send(challenge ?? "");
+      return reply.type("text/plain").send(challenge);
     }
 
     return reply.status(403).send("Forbidden");
   });
 
-  // 🔹 Receber mensagens
+  // receive messages
   app.post("/webhook/whatsapp", async (request, reply) => {
     try {
-      cleanupProcessedMessageIds();
+      const incoming = extractIncomingMessage(request.body);
 
-      const extracted = extractIncomingMessage(request.body);
-
-      // ignora eventos que não são mensagem
-      if (!extracted) {
-        return reply.status(200).send({ ok: true, ignored: true });
-      }
-
-      const { incoming, messageId } = extracted;
-
-      // 🔹 evita resposta duplicada (Meta envia duplicado às vezes)
-      if (messageId) {
-        if (processedMessageIds.has(messageId)) {
-          return reply.status(200).send({ ok: true, duplicate: true });
-        }
-
-        processedMessageIds.set(messageId, Date.now());
+      if (!incoming) {
+        return reply.status(200).send({ ok: true });
       }
 
       const userId = await getOrCreateUserByPhone(incoming.phoneNumber);
 
-      // 🚨 SEMPRE tenta parsear (não depende de intent)
       const parsedExpense = parseExpense(incoming.messageText);
 
       const intent = parsedExpense ? "expense" : "unknown";
@@ -173,12 +111,10 @@ export async function registerWhatsappWebhookRoute(
         intent
       });
 
-      // 🚨 Só salva se parseou corretamente
       if (parsedExpense) {
         await saveExpense(userId, parsedExpense);
       }
 
-      // 🚨 NÃO usamos dailyLimit na resposta (evita lixo)
       const responseText = await generateAssistantReply({
         intent,
         originalMessage: incoming.messageText,
@@ -198,7 +134,6 @@ export async function registerWhatsappWebhookRoute(
 
     } catch (error) {
       request.log.error(error);
-
       return reply.status(500).send({
         error: "Internal server error"
       });
