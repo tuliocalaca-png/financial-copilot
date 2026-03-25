@@ -20,34 +20,42 @@ export async function generateAssistantReply(input: ResponseInput): Promise<stri
           role: "system",
           content:
             "Você é um copiloto financeiro pessoal via WhatsApp.\n\n" +
-            "Seu papel não é só registrar gastos. Você ajuda a pessoa a tomar decisões melhores no dia a dia, " +
-            "como um parceiro inteligente, direto e útil (quase um CFO pessoal, sem formalidade).\n\n" +
-            "Objetivo:\n" +
-            "- registrar gastos sem fricção\n" +
-            "- responder consultas de gasto (hoje, ontem, semana, período)\n" +
-            "- ajudar em decisões tipo: 'posso gastar isso?', 'vale a pena?', 'to gastando muito?'\n" +
-            "- criar consciência financeira sem ser chato ou burocrático\n\n" +
-            "Comportamento:\n" +
-            "- fale como humano no WhatsApp\n" +
-            "- tom direto, inteligente e levemente provocador quando fizer sentido\n" +
-            "- máximo 3–5 linhas\n" +
-            "- pode usar emoji com moderação (👀 💸 👍)\n\n" +
-            "Princípio central:\n" +
-            "- interpretar intenção antes de exigir precisão\n" +
-            "- ajudar, não bloquear\n\n" +
-            "Regras críticas:\n" +
-            "- NUNCA diga 'não entendi'\n" +
-            "- NUNCA peça para reformular\n" +
-            "- NUNCA seja robótico ou acadêmico\n" +
-            "- NUNCA responda com JSON/markdown/listas técnicas\n\n" +
-            "Intenções que você deve assumir mesmo com frase imperfeita:\n" +
-            "- consulta de gasto: 'quanto gastei hoje', 'quanto gastei ontem', 'qnto gastei ontem', 'gastei quanto ontem?', 'meu total hoje', 'ontem deu quanto?'\n" +
-            "- pergunta de decisão: 'posso gastar isso?', 'vale a pena comprar isso?', 'to gastando muito?'\n\n" +
-            "Saudação esperada (oi/olá/e aí):\n" +
+            "Seu papel NÃO é apenas registrar gastos.\n" +
+            "Seu papel é ajudar o usuário a entender, controlar e decidir melhor sobre dinheiro no dia a dia.\n" +
+            "Aja como um parceiro inteligente, direto e útil — um CFO pessoal acessível, sem ser formal.\n\n" +
+            "CONTEXTO DISPONÍVEL (obrigatório usar):\n" +
+            "Você sempre recebe um bloco \"CONTEXTO\" com: mensagem do usuário, gasto identificado (parsedExpense, se houver) " +
+            "e limite diário calculado (dailyLimit, se houver).\n" +
+            "Ignorar contexto quando ele existe é erro grave.\n" +
+            "Se já há gasto registrado nesta mensagem (parsedExpense): confirme o registro de forma natural.\n" +
+            "Se total gasto no mês (totalSpentMonth) > 0: USE isso em consultas; NÃO peça para registrar de novo.\n" +
+            "Se totalSpentMonth for 0 e o usuário consultar gastos: diga que ainda não há registros suficientes e sugira um exemplo.\n\n" +
+            "OBJETIVO:\n" +
+            "- Registrar gastos sem fricção\n" +
+            "- Entender quanto já gastou (hoje, ontem, semana, etc.) — use o que o contexto permite\n" +
+            "- Entender categorias com base no que foi registrado (use descrição/categoria amigável do contexto)\n" +
+            "- Ajudar em decisões melhores\n" +
+            "- Consciência financeira sem burocracia\n\n" +
+            "COMPORTAMENTO:\n" +
+            "- Fale como humano no WhatsApp\n" +
+            "- Direto, claro, máximo 3–5 linhas\n" +
+            "- Emoji com moderação (👀 💸 👍)\n" +
+            "- Nunca robótico, nunca genérico quando há dados no contexto\n\n" +
+            "INTERPRETAÇÃO:\n" +
+            "Frases como 'quanto gastei ontem', 'qnt gaste ontem', 'gastei quanto ontem?', 'ontem deu quanto?' são consulta válida — nunca diga que não entendeu.\n\n" +
+            "REGISTRO (com parsedExpense):\n" +
+            "Confirme de forma natural, ex.: 'Anotei 💸 R$X no …'. Pode comentar leve se fizer sentido.\n" +
+            "Se houver vários valores na mensagem, use só o total já fornecido no contexto.\n\n" +
+            "CONSULTAS SEM DETALHE DE ONTEM NO BACKEND:\n" +
+            "Se o usuário pedir 'ontem' mas o contexto só tiver acumulado do mês, responda com o que sabe (total do mês e número do dia) " +
+            "e diga em uma linha que o detalhe por dia ainda é limitado — sem soar técnico.\n\n" +
+            "DECISÃO:\n" +
+            "Resposta prática e levemente provocadora, ex.: 'Depende — isso é pontual ou recorrente? Se repetir muito, pesa mais do que parece 👀'\n\n" +
+            "SAUDAÇÃO:\n" +
             "\"Oi! 👋\\nEu te ajudo a registrar gastos e entender pra onde seu dinheiro está indo.\\nEx: 'gastei 20 no almoço' ou 'quanto gastei hoje?'\"\n\n" +
-            "Se não houver dados para consulta, seja útil:\n" +
-            "\"Consigo te mostrar isso 👀\\nMas primeiro você precisa registrar alguns gastos.\\nEx: 'gastei 20 no almoço'\"\n\n" +
-            "Quando houver gasto, confirme de forma simples e clara."
+            "ERROS PROIBIDOS:\n" +
+            "- 'não entendi', pedir reformular, ignorar contexto, resposta genérica com dados disponíveis\n\n" +
+            "Responda só em texto de chat. Sem JSON, markdown ou listas técnicas."
         },
         {
           role: "user",
@@ -67,8 +75,59 @@ export async function generateAssistantReply(input: ResponseInput): Promise<stri
   return enforceDailyLimitTone(fallbackReply(input), input);
 }
 
+function formatContextBlock(input: ResponseInput): string {
+  const lines = [
+    "CONTEXTO:",
+    `- Mensagem do usuario: "${input.originalMessage}"`,
+    `- Intent (sistema): ${input.intent}`
+  ];
+
+  if (input.parsedExpense) {
+    lines.push(
+      `- Gasto identificado (parsedExpense): valor total R$ ${input.parsedExpense.amount.toFixed(2)}`,
+      `  Descricao original: ${input.parsedExpense.description}`,
+      `  Categoria (apresente em portugues natural ao usuario, ex.: "${categoryFriendlyPT(input.parsedExpense.category)}") — nao use rotulos tecnicos em ingles`
+    );
+  } else {
+    lines.push("- Gasto identificado (parsedExpense): nenhum nesta mensagem");
+  }
+
+  if (input.dailyLimit) {
+    const d = input.dailyLimit;
+    lines.push(
+      `- Limite diario (dailyLimit / numero do dia): R$ ${d.dailyLimit.toFixed(2)}`,
+      `- Total gasto no mes acumulado (totalSpentMonth): R$ ${d.totalSpentMonth.toFixed(2)}`,
+      `- Margem restante no mes (remainingMonthBudget): R$ ${d.remainingMonthBudget.toFixed(2)}`,
+      `- Dias restantes no mes (remainingDaysInMonth): ${d.remainingDaysInMonth}`
+    );
+  } else {
+    lines.push("- Limite diario calculado: indisponivel");
+  }
+
+  lines.push(
+    "Use o contexto acima na resposta. Se totalSpentMonth > 0, nao peca para registrar como se nao houvesse historico."
+  );
+
+  return lines.join("\n");
+}
+
+function categoryFriendlyPT(internal: string): string {
+  const map: Record<string, string> = {
+    alimentacao: "alimentação",
+    transporte: "transporte",
+    moradia: "moradia",
+    saude: "saúde",
+    lazer: "lazer",
+    outros: "outros gastos"
+  };
+  const key = (internal || "").trim().toLowerCase();
+  return map[key] ?? (key || "gastos");
+}
+
 function buildPrompt(input: ResponseInput): string {
-  if (input.intent === "expense" && input.parsedExpense) {
+  const ctx = `${formatContextBlock(input)}\n\n`;
+
+  if (input.parsedExpense) {
     const isConcern = hasConcernQuestion(input.originalMessage);
     const dailyLimitValue = input.dailyLimit?.dailyLimit;
     const amountTotal = input.parsedExpense.amount;
@@ -95,83 +154,123 @@ function buildPrompt(input: ResponseInput): string {
         dailyLimitValue != null && dailyLimitValue > 0
           ? `; seu número do dia fica em R$${dailyLimitValue.toFixed(0)}`
           : "";
-      return [
-        ...baseRules,
-        `Primeiras palavras (nao altere): ${statusAnswer}`,
-        `Responda exatamente com: "${statusAnswer} Esse ${typeLabel} de R$${amountTotal.toFixed(0)} mexe no seu dia${day}. Se continuar nesse ritmo, o mês aperta."`
-      ].join("\n");
+      return (
+        ctx +
+        [
+          ...baseRules,
+          `Primeiras palavras (nao altere): ${statusAnswer}`,
+          `Responda exatamente com: "${statusAnswer} Esse ${typeLabel} de R$${amountTotal.toFixed(0)} mexe no seu dia${day}. Se continuar nesse ritmo, o mês aperta."`
+        ].join("\n")
+      );
     }
 
     // Scenario 4: multiple amounts in the same message (mention only TOTAL)
     if (isMultipleAmounts && dailyLimitValue != null && dailyLimitValue > 0) {
-      return [
-        ...baseRules,
-        `Responda exatamente com: "Esses R$${amountTotal.toFixed(0)} de uma vez já pesam no dia; seu número do dia fica em R$${dailyLimitValue.toFixed(0)}. Mantendo esse ritmo, o mês perde folga rápido."`
-      ].join("\n");
+      return (
+        ctx +
+        [
+          ...baseRules,
+          `Responda exatamente com: "Esses R$${amountTotal.toFixed(0)} de uma vez já pesam no dia; seu número do dia fica em R$${dailyLimitValue.toFixed(0)}. Mantendo esse ritmo, o mês perde folga rápido."`
+        ].join("\n")
+      );
     }
 
     // Scenario: NEGATIVE DAY
     if (dailyLimitValue != null && dailyLimitValue < 0) {
-      return [
-        ...baseRules,
-        `Responda exatamente com: "Hoje você já está no vermelho. Esse ${typeLabel} de R$${amountTotal.toFixed(0)} só aumenta a pressão para fechar o mês."`
-      ].join("\n");
+      return (
+        ctx +
+        [
+          ...baseRules,
+          `Responda exatamente com: "Hoje você já está no vermelho. Esse ${typeLabel} de R$${amountTotal.toFixed(0)} só aumenta a pressão para fechar o mês."`
+        ].join("\n")
+      );
     }
 
     // SMALL / MEDIUM positive dailyLimit
     if (dailyLimitValue != null && dailyLimitValue > 0) {
       if (scenario === "SMALL_EXPENSE") {
-        return [
-          ...baseRules,
-          `Responda exatamente com: "Esse ${typeLabel} de R$${amountTotal.toFixed(0)} ainda quase não mexe no dia; seu número do dia fica em R$${dailyLimitValue.toFixed(0)}. O risco aparece quando esse tipo de saída vira rotina."`
-        ].join("\n");
+        return (
+          ctx +
+          [
+            ...baseRules,
+            `Responda exatamente com: "Esse ${typeLabel} de R$${amountTotal.toFixed(0)} ainda quase não mexe no dia; seu número do dia fica em R$${dailyLimitValue.toFixed(0)}. O risco aparece quando esse tipo de saída vira rotina."`
+          ].join("\n")
+        );
       }
 
       if (scenario === "MEDIUM_EXPENSE") {
-        return [
-          ...baseRules,
-          `Responda exatamente com: "Esse ${typeLabel} de R$${amountTotal.toFixed(0)} já reduz um pouco sua folga; seu número do dia fica em R$${dailyLimitValue.toFixed(0)}. Repetindo esse ritmo, o mês começa a perder margem."`
-        ].join("\n");
+        return (
+          ctx +
+          [
+            ...baseRules,
+            `Responda exatamente com: "Esse ${typeLabel} de R$${amountTotal.toFixed(0)} já reduz um pouco sua folga; seu número do dia fica em R$${dailyLimitValue.toFixed(0)}. Repetindo esse ritmo, o mês começa a perder margem."`
+          ].join("\n")
+        );
       }
 
       // HIGH_EXPENSE positive
-      return [
-        ...baseRules,
-        `Responda exatamente com: "Esse ${typeLabel} de R$${amountTotal.toFixed(0)} puxa forte seu dia; seu número do dia fica em R$${dailyLimitValue.toFixed(0)}. Mantendo esse ritmo, o impacto no mês vem rápido."`
-      ].join("\n");
+      return (
+        ctx +
+        [
+          ...baseRules,
+          `Responda exatamente com: "Esse ${typeLabel} de R$${amountTotal.toFixed(0)} puxa forte seu dia; seu número do dia fica em R$${dailyLimitValue.toFixed(0)}. Mantendo esse ritmo, o impacto no mês vem rápido."`
+        ].join("\n")
+      );
     }
 
     // Fallback: keep output short and consistent
-    return [
-      ...baseRules,
-      `Responda exatamente com: "Esse ${typeLabel} de R$${amountTotal.toFixed(0)} mexe no seu dia. Mantendo esse ritmo, o mês aperta."`
-    ].join("\n");
+    return (
+      ctx +
+      [
+        ...baseRules,
+        `Responda exatamente com: "Esse ${typeLabel} de R$${amountTotal.toFixed(0)} mexe no seu dia. Mantendo esse ritmo, o mês aperta."`
+      ].join("\n")
+    );
   }
 
   if (input.intent === "daily_limit_query" && input.dailyLimit) {
-    return [
-      `Mensagem original: "${input.originalMessage}"`,
-      "Responda em 1 ou 2 frases, em tom de WhatsApp, sem linguagem contabil e sem lista de numeros.",
-      "Se houver pergunta de preocupacao, responda isso diretamente nas primeiras palavras.",
-      `Numero do dia atual: R$ ${input.dailyLimit.dailyLimit.toFixed(2)}.`,
-      "Conecte com a consequencia de manter esse ritmo no restante do mes."
-    ].join("\n");
+    return (
+      ctx +
+      [
+        "Responda em 3–5 linhas, tom WhatsApp, usando obrigatoriamente o CONTEXTO.",
+        "Traga numero do dia e total gasto no mes do contexto.",
+        "Sem linguagem contabil; sem lista longa de numeros.",
+        `Referencia: numero do dia R$ ${input.dailyLimit.dailyLimit.toFixed(2)}; total no mes R$ ${input.dailyLimit.totalSpentMonth.toFixed(2)}.`
+      ].join("\n")
+    );
   }
 
-  return [
-    `Mensagem original: "${input.originalMessage}"`,
-    isGreetingMessage(input.originalMessage)
-      ? "Se o usuário estiver cumprimentando, responda com exatamente: \"Oi! 👋\\nEu te ajudo a registrar gastos e entender pra onde seu dinheiro está indo.\\nEx: 'gastei 20 no almoço' ou 'quanto gastei hoje?'\""
-      : isSpendingConsultQuery(input.originalMessage)
-        ? "O usuário está pedindo consulta de gasto (hoje/ontem/período). Responda como se entendeu perfeitamente, sem pedir reformulação. Se não houver dados, use: \"Consigo te mostrar isso 👀\\nMas primeiro você precisa registrar alguns gastos.\\nEx: 'gastei 20 no almoço'\""
-        : isDecisionQuestion(input.originalMessage)
-          ? "O usuário está pedindo ajuda de decisão. Responda de forma prática e com reflexão leve, sem ser genérico. Exemplo de estilo: \"Depende — isso é necessidade ou impulso? Se for recorrente, pesa mais do que parece 👀\""
-          : "Não responda com \"não entendi\". Seja útil mesmo se a mensagem for vaga. Interprete intenção e sugira próximos passos curtos."
-  ].join("\n");
+  const consultInstruction =
+    input.dailyLimit && input.dailyLimit.totalSpentMonth > 0
+      ? "O usuario consulta gastos. Ha dados no contexto (totalSpentMonth > 0). Responda com esses numeros de forma natural (ex.: quanto ja acumulou no mes) e o numero do dia. " +
+        "Se a pergunta for especifica de 'ontem' e voce nao tiver o valor de ontem no contexto, diga o que sabe (mes + numero do dia) e que o detalhe por dia ainda e simples nesta versao — sem jargao. " +
+        "NUNCA peca para registrar como se nao houvesse historico."
+      : "O usuario consulta gastos. Se totalSpentMonth no contexto for 0 ou inexistente, use: \"Consigo te mostrar isso 👀\\nMas ainda não tenho registros suficientes.\\nEx: 'gastei 20 no almoço'\"";
+
+  const categoryInstruction =
+    isCategoryQuestion(input.originalMessage) && input.dailyLimit && input.dailyLimit.totalSpentMonth > 0
+      ? "O usuario pergunta sobre categorias. Use apenas o que o CONTEXTO mostra (ultima despesa/categoria amigavel se houver; total do mes). Nao invente itens nao registrados."
+      : "";
+
+  return (
+    ctx +
+    [
+      isGreetingMessage(input.originalMessage)
+        ? "Se o usuário estiver cumprimentando, responda com exatamente: \"Oi! 👋\\nEu te ajudo a registrar gastos e entender pra onde seu dinheiro está indo.\\nEx: 'gastei 20 no almoço' ou 'quanto gastei hoje?'\""
+        : isSpendingConsultQuery(input.originalMessage)
+          ? consultInstruction
+          : isCategoryQuestion(input.originalMessage)
+            ? categoryInstruction ||
+              "O usuario pergunta sobre categorias. Se nao houver dados no contexto, oriente a registrar um gasto com exemplo, sem ser robotico."
+            : isDecisionQuestion(input.originalMessage)
+              ? "O usuário está pedindo ajuda de decisão. Responda de forma prática e com reflexão leve. Use dailyLimit do contexto se couber (ex.: se numero do dia esta apertado). Estilo: \"Depende — isso é pontual ou recorrente? Se repetir muito, pesa mais do que parece 👀\""
+              : "Não responda com \"não entendi\". Seja útil; interprete intenção; sugira um proximo passo curto com exemplo."
+    ].join("\n\n")
+  );
 }
 
 function fallbackReply(input: ResponseInput): string {
-  if (input.intent === "expense" && input.parsedExpense) {
+  if (input.parsedExpense) {
     if (input.dailyLimit) {
       const opening = concernOpening(input.originalMessage, input.dailyLimit.dailyLimit);
       const prefix = opening ? `${opening} ` : "";
@@ -207,7 +306,15 @@ function fallbackReply(input: ResponseInput): string {
     return "Oi! 👋\nEu te ajudo a registrar gastos e entender pra onde seu dinheiro está indo.\nEx: 'gastei 20 no almoço' ou 'quanto gastei hoje?'";
   }
   if (isSpendingConsultQuery(input.originalMessage)) {
-    return "Consigo te mostrar isso 👀\nMas primeiro você precisa registrar alguns gastos.\nEx: 'gastei 20 no almoço'";
+    if (input.dailyLimit && input.dailyLimit.totalSpentMonth > 0) {
+      const d = input.dailyLimit;
+      return (
+        `No mês você já acumulou cerca de R$${d.totalSpentMonth.toFixed(0)} em gastos 💸\n` +
+        `Seu número do dia agora fica em R$${d.dailyLimit.toFixed(0)}.\n` +
+        `Se você perguntou só de um dia (ex.: ontem), aqui eu ainda consolido melhor o mês todo — posso refinar isso depois 👀`
+      );
+    }
+    return "Consigo te mostrar isso 👀\nMas ainda não tenho registros suficientes.\nEx: 'gastei 20 no almoço'";
   }
   if (isDecisionQuestion(input.originalMessage)) {
     return "Boa pergunta 👀\nIsso é necessidade ou impulso?\nSe virar padrão, pesa mais do que parece.";
@@ -250,10 +357,12 @@ function isGreetingMessage(message: string): boolean {
 function isSpendingConsultQuery(message: string): boolean {
   const text = (message || "").toLowerCase();
 
-  const hasQuanto = text.includes("quanto");
-  const hasGastei = text.includes("gastei") || text.includes("gastou");
+  const hasQuanto = text.includes("quanto") || text.includes("qnt") || text.includes("qnto");
+  const hasGastei =
+    text.includes("gastei") || text.includes("gastou") || /\bgaste\b/.test(text);
   const hasTotal = text.includes("meu total") || text.includes("total de") || text.includes("total");
   const hasFoi = text.includes("quanto foi");
+  const hasDeuQuanto = text.includes("deu quanto") || text.includes("deu qto");
 
   const hasHoje = text.includes("hoje");
   const hasOntem = text.includes("ontem");
@@ -264,10 +373,12 @@ function isSpendingConsultQuery(message: string): boolean {
   const hasAnyTime = hasHoje || hasOntem || hasSemana || hasMes || hasPeriodo;
 
   return (
+    (hasOntem && (hasQuanto || hasGastei || hasDeuQuanto)) ||
     (hasQuanto && hasGastei && hasAnyTime) ||
     (hasFoi && (hasHoje || hasOntem)) ||
     (hasGastei && hasAnyTime) ||
-    (hasTotal && (hasHoje || hasOntem || hasSemana || hasMes || hasPeriodo))
+    (hasTotal && (hasHoje || hasOntem || hasSemana || hasMes || hasPeriodo)) ||
+    (text.includes("gastei quanto") && hasOntem)
   );
 }
 
@@ -280,6 +391,17 @@ function isDecisionQuestion(message: string): boolean {
     text.includes("tô gastando muito") ||
     text.includes("isso cabe") ||
     text.includes("devo comprar")
+  );
+}
+
+function isCategoryQuestion(message: string): boolean {
+  const text = (message || "").toLowerCase();
+  return (
+    text.includes("categoria") ||
+    text.includes("categorias") ||
+    text.includes("onde gastei") ||
+    text.includes("em que gastei") ||
+    text.includes("no que gastei")
   );
 }
 
@@ -314,7 +436,16 @@ function classifyExpenseScenario(amount: number, dailyLimit?: DailyLimitResult):
 }
 
 function enforceDailyLimitTone(text: string, input: ResponseInput): string {
-  if (!input.dailyLimit || (input.intent !== "expense" && input.intent !== "daily_limit_query")) {
+  if (!input.dailyLimit) {
+    return text;
+  }
+
+  const toneApplies =
+    Boolean(input.parsedExpense) ||
+    input.intent === "daily_limit_query" ||
+    isSpendingConsultQuery(input.originalMessage);
+
+  if (!toneApplies) {
     return text;
   }
 
@@ -327,7 +458,7 @@ function enforceDailyLimitTone(text: string, input: ResponseInput): string {
     normalized.includes("no negativo");
 
   // SMALL expense with positive dailyLimit: always use a consistent, human WhatsApp-like pattern.
-  if (input.intent === "expense" && input.parsedExpense && dailyLimit > 0) {
+  if (input.parsedExpense && dailyLimit > 0) {
     const scenario = classifyExpenseScenario(input.parsedExpense.amount, input.dailyLimit);
     if (scenario === "SMALL_EXPENSE") {
       const label = extractExpenseTypeLabel(input);
