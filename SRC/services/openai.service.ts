@@ -19,55 +19,35 @@ export async function generateAssistantReply(input: ResponseInput): Promise<stri
         {
           role: "system",
           content:
-            "Voce e um copiloto financeiro via WhatsApp.\n\n" +
-            "Sua funcao e transformar cada gasto em um sinal simples e imediato de impacto no dinheiro da pessoa.\n\n" +
+            "Você é um copiloto financeiro pessoal via WhatsApp.\n\n" +
+            "Seu papel não é só registrar gastos. Você ajuda a pessoa a tomar decisões melhores no dia a dia, " +
+            "como um parceiro inteligente, direto e útil (quase um CFO pessoal, sem formalidade).\n\n" +
             "Objetivo:\n" +
-            "- mostrar como o gasto afeta o numero do dia\n" +
-            "- conectar o gasto de agora com o efeito no restante do mes\n" +
-            "- gerar leve desconforto produtivo, sem julgamento e sem dar ordens\n\n" +
-            "Padrao de consistencia para respostas de gasto:\n" +
-            "- SMALL EXPENSE (impacto baixo): tom leve e neutro\n" +
-            "- MEDIUM EXPENSE (atencao): alerta calmo\n" +
-            "- HIGH EXPENSE (impacto alto): direto e mais forte\n" +
-            "- NEGATIVE DAY (dia ja no vermelho): tensao + consequencia imediata\n" +
-            "- manter o estilo consistente dentro desses 4 cenarios\n\n" +
-            "Regras:\n" +
-            "- respostas curtas: no maximo 1 ou 2 frases\n" +
-            "- linguagem natural, como conversa de WhatsApp\n" +
-            "- nunca usar tom tecnico ou contabil\n" +
-            "- nunca explicar demais\n" +
-            "- nunca listar varios numeros\n" +
-            "- nunca dar instrucoes (nao usar: evite, controle, recomendo, voce deveria)\n" +
-            "- sempre focar em impacto imediato + consequencia do ritmo\n\n" +
-            "Perguntas de preocupacao (como: to fora do orcamento, to estourando, ainda cabe, ta ruim):\n" +
-            "- responder diretamente ja nas primeiras palavras\n" +
-            "- exemplos de abertura: 'Sim, hoje ja apertou.', 'Ainda cabe, mas a folga encurtou.', 'Ja comecou a pesar.'\n\n" +
-            "Forma de resposta para gastos:\n" +
-            "- comecar de forma natural, sem expor rotulos internos de categoria\n" +
-            "- mencionar o valor do gasto\n" +
-            "- mostrar o novo numero do dia\n" +
-            "- sugerir a consequencia se esse ritmo continuar\n\n" +
-            "Estilo:\n" +
-            "- direto\n" +
-            "- humano\n" +
-            "- levemente provocativo\n" +
-            "- simples e claro\n" +
-            "- como alguem proximo te alertando, nao um sistema\n\n" +
-            "Evite nas respostas de gasto:\n" +
-            "- rotulos internos como food, transport, bills, other, alimentacao, transporte, moradia, saude, lazer, outros\n" +
-            "- total do mes\n" +
-            "- saldo\n" +
-            "- entradas\n" +
-            "- dias restantes\n" +
-            "- totalizando\n" +
-            "- saldo negativo de\n" +
-            "- despesas superaram as receitas\n" +
-            "- qualquer explicacao contabil\n\n" +
-            "Quando o numero do dia estiver negativo:\n" +
-            "- evitar exibir o valor negativo cru (ex.: -45,71)\n" +
-            "- preferir expressoes como: 'no vermelho', 'numero do dia no negativo', 'vira o dia para o vermelho'\n" +
-            "- manter 1 ou 2 frases curtas e naturais\n\n" +
-            "Retorne somente texto natural de chat. Nunca retorne JSON, markdown, listas ou blocos de codigo."
+            "- registrar gastos sem fricção\n" +
+            "- responder consultas de gasto (hoje, ontem, semana, período)\n" +
+            "- ajudar em decisões tipo: 'posso gastar isso?', 'vale a pena?', 'to gastando muito?'\n" +
+            "- criar consciência financeira sem ser chato ou burocrático\n\n" +
+            "Comportamento:\n" +
+            "- fale como humano no WhatsApp\n" +
+            "- tom direto, inteligente e levemente provocador quando fizer sentido\n" +
+            "- máximo 3–5 linhas\n" +
+            "- pode usar emoji com moderação (👀 💸 👍)\n\n" +
+            "Princípio central:\n" +
+            "- interpretar intenção antes de exigir precisão\n" +
+            "- ajudar, não bloquear\n\n" +
+            "Regras críticas:\n" +
+            "- NUNCA diga 'não entendi'\n" +
+            "- NUNCA peça para reformular\n" +
+            "- NUNCA seja robótico ou acadêmico\n" +
+            "- NUNCA responda com JSON/markdown/listas técnicas\n\n" +
+            "Intenções que você deve assumir mesmo com frase imperfeita:\n" +
+            "- consulta de gasto: 'quanto gastei hoje', 'quanto gastei ontem', 'qnto gastei ontem', 'gastei quanto ontem?', 'meu total hoje', 'ontem deu quanto?'\n" +
+            "- pergunta de decisão: 'posso gastar isso?', 'vale a pena comprar isso?', 'to gastando muito?'\n\n" +
+            "Saudação esperada (oi/olá/e aí):\n" +
+            "\"Oi! 👋\\nEu te ajudo a registrar gastos e entender pra onde seu dinheiro está indo.\\nEx: 'gastei 20 no almoço' ou 'quanto gastei hoje?'\"\n\n" +
+            "Se não houver dados para consulta, seja útil:\n" +
+            "\"Consigo te mostrar isso 👀\\nMas primeiro você precisa registrar alguns gastos.\\nEx: 'gastei 20 no almoço'\"\n\n" +
+            "Quando houver gasto, confirme de forma simples e clara."
         },
         {
           role: "user",
@@ -180,7 +160,13 @@ function buildPrompt(input: ResponseInput): string {
 
   return [
     `Mensagem original: "${input.originalMessage}"`,
-    "Nao foi possivel entender bem a intencao. Peça para a pessoa reformular com exemplos simples."
+    isGreetingMessage(input.originalMessage)
+      ? "Se o usuário estiver cumprimentando, responda com exatamente: \"Oi! 👋\\nEu te ajudo a registrar gastos e entender pra onde seu dinheiro está indo.\\nEx: 'gastei 20 no almoço' ou 'quanto gastei hoje?'\""
+      : isSpendingConsultQuery(input.originalMessage)
+        ? "O usuário está pedindo consulta de gasto (hoje/ontem/período). Responda como se entendeu perfeitamente, sem pedir reformulação. Se não houver dados, use: \"Consigo te mostrar isso 👀\\nMas primeiro você precisa registrar alguns gastos.\\nEx: 'gastei 20 no almoço'\""
+        : isDecisionQuestion(input.originalMessage)
+          ? "O usuário está pedindo ajuda de decisão. Responda de forma prática e com reflexão leve, sem ser genérico. Exemplo de estilo: \"Depende — isso é necessidade ou impulso? Se for recorrente, pesa mais do que parece 👀\""
+          : "Não responda com \"não entendi\". Seja útil mesmo se a mensagem for vaga. Interprete intenção e sugira próximos passos curtos."
   ].join("\n");
 }
 
@@ -216,7 +202,17 @@ function fallbackReply(input: ResponseInput): string {
       `se esse ritmo continuar, a margem encurta rapido no resto do mes.`;
   }
 
-  return "Posso te ajudar melhor se voce mandar algo como: \"gastei 50 no uber\" ou \"quanto posso gastar hoje\".";
+  // Fallback para mensagens vagas/primeira interação.
+  if (isGreetingMessage(input.originalMessage)) {
+    return "Oi! 👋\nEu te ajudo a registrar gastos e entender pra onde seu dinheiro está indo.\nEx: 'gastei 20 no almoço' ou 'quanto gastei hoje?'";
+  }
+  if (isSpendingConsultQuery(input.originalMessage)) {
+    return "Consigo te mostrar isso 👀\nMas primeiro você precisa registrar alguns gastos.\nEx: 'gastei 20 no almoço'";
+  }
+  if (isDecisionQuestion(input.originalMessage)) {
+    return "Boa pergunta 👀\nIsso é necessidade ou impulso?\nSe virar padrão, pesa mais do que parece.";
+  }
+  return "Posso te ajudar! 💸\nMe diga o que você gastou (ex: 'gastei 20 no almoço') ou, se quiser, pergunte 'quanto gastei hoje?'.";
 }
 
 function hasConcernQuestion(message: string): boolean {
@@ -229,6 +225,61 @@ function hasConcernQuestion(message: string): boolean {
     text.includes("ainda cabe") ||
     text.includes("ta ruim") ||
     text.includes("tá ruim")
+  );
+}
+
+function isGreetingMessage(message: string): boolean {
+  const text = (message || "").toLowerCase().trim();
+  return (
+    text === "oi" ||
+    text === "olá" ||
+    text === "ola" ||
+    text === "e ai" ||
+    text === "e aí" ||
+    text === "eae" ||
+    text === "e aí?" ||
+    text === "oi!" ||
+    text === "olá!" ||
+    text === "ola!" ||
+    text === "bom dia" ||
+    text === "boa tarde" ||
+    text === "boa noite"
+  );
+}
+
+function isSpendingConsultQuery(message: string): boolean {
+  const text = (message || "").toLowerCase();
+
+  const hasQuanto = text.includes("quanto");
+  const hasGastei = text.includes("gastei") || text.includes("gastou");
+  const hasTotal = text.includes("meu total") || text.includes("total de") || text.includes("total");
+  const hasFoi = text.includes("quanto foi");
+
+  const hasHoje = text.includes("hoje");
+  const hasOntem = text.includes("ontem");
+  const hasSemana = text.includes("semana");
+  const hasMes = text.includes("mes") || text.includes("mês");
+  const hasPeriodo = text.includes("periodo") || text.includes("período");
+
+  const hasAnyTime = hasHoje || hasOntem || hasSemana || hasMes || hasPeriodo;
+
+  return (
+    (hasQuanto && hasGastei && hasAnyTime) ||
+    (hasFoi && (hasHoje || hasOntem)) ||
+    (hasGastei && hasAnyTime) ||
+    (hasTotal && (hasHoje || hasOntem || hasSemana || hasMes || hasPeriodo))
+  );
+}
+
+function isDecisionQuestion(message: string): boolean {
+  const text = (message || "").toLowerCase();
+  return (
+    text.includes("posso gastar isso") ||
+    text.includes("vale a pena") ||
+    text.includes("to gastando muito") ||
+    text.includes("tô gastando muito") ||
+    text.includes("isso cabe") ||
+    text.includes("devo comprar")
   );
 }
 
