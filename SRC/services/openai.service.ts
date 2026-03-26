@@ -3,6 +3,8 @@ import { config } from "../core/config";
 import { naturalCategoryLabel } from "./transaction-helpers";
 import type { QueryDetailLevel } from "./query-context.service";
 import type { SpendingTransaction } from "./transaction-details.service";
+import type { FinanceQueryType } from "./spending-query.service";
+import type { ParsedExpensePayload as _ParsedExpensePayload } from "./openai.service";
 
 const openai = new OpenAI({
   apiKey: config.openAiApiKey
@@ -32,13 +34,20 @@ export type ParsedExpensePayload = {
   amount: number;
   description: string;
   category: string;
+  kind: "expense" | "income";
 };
 
-export type SpendingFactsPayload = {
+export type FinanceFactsPayload = {
   periodLabel: string;
-  total: number;
-  transactionCount: number;
-  byCategory: { category: string; total: number }[];
+  queryType: FinanceQueryType;
+  totalExpenses: number;
+  totalIncome: number;
+  balance: number;
+  expenseTransactionCount: number;
+  incomeTransactionCount: number;
+  totalTransactionCount: number;
+  expenseByCategory: { category: string; total: number }[];
+  incomeByCategory: { category: string; total: number }[];
   detailLevel: QueryDetailLevel;
   byCategoryRequested: boolean;
   transactions?: SpendingTransaction[];
@@ -46,14 +55,14 @@ export type SpendingFactsPayload = {
 
 export type AssistantRequest =
   | {
-      variant: "expense";
+      variant: "transaction";
       originalMessage: string;
       parsedExpense: ParsedExpensePayload;
     }
   | {
-      variant: "spending";
+      variant: "finance_query";
       originalMessage: string;
-      facts: SpendingFactsPayload;
+      facts: FinanceFactsPayload;
     }
   | {
       variant: "generic";
@@ -69,50 +78,145 @@ function brl(value: number): string {
 
 function titleCase(text: string): string {
   const trimmed = text.trim();
-  return trimmed.length > 0 ? trimmed.charAt(0).toUpperCase() + trimmed.slice(1) : "Gasto";
+  return trimmed.length > 0 ? trimmed.charAt(0).toUpperCase() + trimmed.slice(1) : "Movimento";
 }
 
-function formatExpenseReply(parsedExpense: ParsedExpensePayload): string {
+function formatTransactionReply(parsedExpense: ParsedExpensePayload): string {
+  if (parsedExpense.kind === "income") {
+    return `Anotei 💰 entrada de ${brl(parsedExpense.amount)} em ${titleCase(parsedExpense.description)}.`;
+  }
+
   return `Anotei 💸 ${brl(parsedExpense.amount)} em ${titleCase(parsedExpense.description)}.`;
 }
 
-function formatNoDataReply(periodLabel: string): string {
+function formatNoDataReply(periodLabel: string, queryType: FinanceQueryType): string {
+  if (queryType === "income") {
+    return `No período “${periodLabel}” não encontrei entradas registradas 👀\n\nQuando receber, manda tipo: “recebi 500 no pix”.`;
+  }
+
+  if (queryType === "balance") {
+    return `No período “${periodLabel}” ainda não encontrei movimentações suficientes para calcular saldo 👀`;
+  }
+
   return `No período “${periodLabel}” não encontrei gastos registrados 👀\n\nQuando gastar, manda tipo: “gastei 20 no almoço”.`;
 }
 
-function formatSummaryReply(facts: SpendingFactsPayload): string {
+function formatSummaryReply(facts: FinanceFactsPayload): string {
+  if (facts.queryType === "income") {
+    return [
+      `📊 ${facts.periodLabel}`,
+      `Entradas: ${brl(facts.totalIncome)}`,
+      `Lançamentos: ${facts.incomeTransactionCount}`
+    ].join("\n");
+  }
+
+  if (facts.queryType === "balance") {
+    return [
+      `📊 ${facts.periodLabel}`,
+      `Entradas: ${brl(facts.totalIncome)}`,
+      `Saídas: ${brl(facts.totalExpenses)}`,
+      `Saldo: ${brl(facts.balance)}`
+    ].join("\n");
+  }
+
   return [
     `📊 ${facts.periodLabel}`,
-    `Total: ${brl(facts.total)}`,
-    `Lançamentos: ${facts.transactionCount}`
+    `Saídas: ${brl(facts.totalExpenses)}`,
+    `Lançamentos: ${facts.expenseTransactionCount}`
   ].join("\n");
 }
 
-function formatCategoryReply(facts: SpendingFactsPayload): string {
-  const lines = [
-    `📊 ${facts.periodLabel}`,
-    `Total: ${brl(facts.total)}`,
-    `Lançamentos: ${facts.transactionCount}`
-  ];
+function formatCategoryList(title: string, rows: { category: string; total: number }[]): string[] {
+  const lines: string[] = [title];
 
-  if (facts.byCategory.length > 0) {
-    lines.push("Por categoria:");
-    for (const row of facts.byCategory.slice(0, 10)) {
-      lines.push(`• ${naturalCategoryLabel(row.category)}: ${brl(row.total)}`);
+  for (const row of rows.slice(0, 10)) {
+    lines.push(`• ${naturalCategoryLabel(row.category)}: ${brl(row.total)}`);
+  }
+
+  return lines;
+}
+
+function formatCategoryReply(facts: FinanceFactsPayload): string {
+  const lines: string[] = [];
+
+  if (facts.queryType === "income") {
+    lines.push(`📊 ${facts.periodLabel}`);
+    lines.push(`Entradas: ${brl(facts.totalIncome)}`);
+    lines.push(`Lançamentos: ${facts.incomeTransactionCount}`);
+
+    if (facts.incomeByCategory.length > 0) {
+      lines.push(...formatCategoryList("Por categoria:", facts.incomeByCategory));
     }
+
+    return lines.join("\n");
+  }
+
+  if (facts.queryType === "balance") {
+    lines.push(`📊 ${facts.periodLabel}`);
+    lines.push(`Entradas: ${brl(facts.totalIncome)}`);
+    lines.push(`Saídas: ${brl(facts.totalExpenses)}`);
+    lines.push(`Saldo: ${brl(facts.balance)}`);
+
+    if (facts.incomeByCategory.length > 0) {
+      lines.push(...formatCategoryList("Entradas por categoria:", facts.incomeByCategory));
+    }
+
+    if (facts.expenseByCategory.length > 0) {
+      lines.push(...formatCategoryList("Saídas por categoria:", facts.expenseByCategory));
+    }
+
+    return lines.join("\n");
+  }
+
+  lines.push(`📊 ${facts.periodLabel}`);
+  lines.push(`Saídas: ${brl(facts.totalExpenses)}`);
+  lines.push(`Lançamentos: ${facts.expenseTransactionCount}`);
+
+  if (facts.expenseByCategory.length > 0) {
+    lines.push(...formatCategoryList("Por categoria:", facts.expenseByCategory));
   }
 
   return lines.join("\n");
 }
 
-function formatTransactionReply(facts: SpendingFactsPayload): string {
-  const transactions = facts.transactions ?? [];
+function formatTransactionBlock(
+  title: string,
+  transactions: SpendingTransaction[],
+  totalByCategory?: number
+): string[] {
+  const lines: string[] = [];
 
-  const lines = [
-    `📊 ${facts.periodLabel}`,
-    `Total: ${brl(facts.total)}`,
-    `Lançamentos: ${facts.transactionCount}`
-  ];
+  if (typeof totalByCategory === "number") {
+    lines.push(`${title} — ${brl(totalByCategory)}`);
+  } else {
+    lines.push(title);
+  }
+
+  for (const tx of transactions) {
+    lines.push(`• ${titleCase(tx.description)} — ${brl(tx.amount)}`);
+  }
+
+  return lines;
+}
+
+function formatTransactionReply(facts: FinanceFactsPayload): string {
+  const transactions = facts.transactions ?? [];
+  const lines: string[] = [];
+
+  if (facts.queryType === "income") {
+    lines.push(`📊 ${facts.periodLabel}`);
+    lines.push(`Entradas: ${brl(facts.totalIncome)}`);
+    lines.push(`Lançamentos: ${facts.incomeTransactionCount}`);
+  } else if (facts.queryType === "balance") {
+    lines.push(`📊 ${facts.periodLabel}`);
+    lines.push(`Entradas: ${brl(facts.totalIncome)}`);
+    lines.push(`Saídas: ${brl(facts.totalExpenses)}`);
+    lines.push(`Saldo: ${brl(facts.balance)}`);
+  } else {
+    lines.push(`📊 ${facts.periodLabel}`);
+    lines.push(`Saídas: ${brl(facts.totalExpenses)}`);
+    lines.push(`Lançamentos: ${facts.expenseTransactionCount}`);
+  }
 
   if (transactions.length === 0) {
     return lines.join("\n");
@@ -130,14 +234,18 @@ function formatTransactionReply(facts: SpendingFactsPayload): string {
 
     lines.push("Por categoria:");
 
-    for (const row of facts.byCategory) {
+    const categories =
+      facts.queryType === "income"
+        ? facts.incomeByCategory
+        : facts.queryType === "balance"
+        ? [...facts.incomeByCategory, ...facts.expenseByCategory]
+        : facts.expenseByCategory;
+
+    for (const row of categories) {
       const txs = grouped.get(row.category) ?? [];
       if (txs.length === 0) continue;
 
-      lines.push(`${naturalCategoryLabel(row.category)} — ${brl(row.total)}`);
-      for (const tx of txs) {
-        lines.push(`• ${titleCase(tx.description)} — ${brl(tx.amount)}`);
-      }
+      lines.push(...formatTransactionBlock(naturalCategoryLabel(row.category), txs, row.total));
     }
 
     return lines.join("\n");
@@ -151,9 +259,16 @@ function formatTransactionReply(facts: SpendingFactsPayload): string {
   return lines.join("\n");
 }
 
-function formatSpendingReply(facts: SpendingFactsPayload): string {
-  if (facts.transactionCount === 0) {
-    return formatNoDataReply(facts.periodLabel);
+function formatFinanceReply(facts: FinanceFactsPayload): string {
+  const noData =
+    facts.queryType === "income"
+      ? facts.incomeTransactionCount === 0
+      : facts.queryType === "balance"
+      ? facts.totalTransactionCount === 0
+      : facts.expenseTransactionCount === 0;
+
+  if (noData) {
+    return formatNoDataReply(facts.periodLabel, facts.queryType);
   }
 
   if (facts.detailLevel === "transaction") {
@@ -170,12 +285,12 @@ function formatSpendingReply(facts: SpendingFactsPayload): string {
 export async function generateAssistantReply(
   input: AssistantRequest
 ): Promise<string> {
-  if (input.variant === "expense") {
-    return formatExpenseReply(input.parsedExpense);
+  if (input.variant === "transaction") {
+    return formatTransactionReply(input.parsedExpense as any);
   }
 
-  if (input.variant === "spending") {
-    return formatSpendingReply(input.facts);
+  if (input.variant === "finance_query") {
+    return formatFinanceReply(input.facts);
   }
 
   const userBlocks = [
@@ -188,8 +303,10 @@ export async function generateAssistantReply(
       "- não invente valores financeiros",
       "- sugira exemplos concretos como:",
       '  - "gastei 20 no almoço"',
+      '  - "recebi 500 no pix"',
       '  - "quanto gastei hoje"',
-      '  - "quanto gastei no mês passado por categoria"',
+      '  - "quanto recebi hoje"',
+      '  - "quanto sobrou no mês"',
       '  - "abre os lançamentos por categoria"'
     ].join("\n")
   ];

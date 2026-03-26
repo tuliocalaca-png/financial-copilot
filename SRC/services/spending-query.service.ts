@@ -1,12 +1,26 @@
 import { supabase } from "../db/supabase";
 import {
   isExpenseCategory,
+  isIncomeCategory,
   normalizeCategoryKey
 } from "./transaction-helpers";
 
 export type CategoryTotal = {
   category: string;
   total: number;
+};
+
+export type FinanceQueryType = "expense" | "income" | "balance";
+
+export type FinanceAggregate = {
+  totalExpenses: number;
+  totalIncome: number;
+  balance: number;
+  expenseTransactionCount: number;
+  incomeTransactionCount: number;
+  totalTransactionCount: number;
+  expenseByCategory: CategoryTotal[];
+  incomeByCategory: CategoryTotal[];
 };
 
 export type SpendingAggregate = {
@@ -24,49 +38,69 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-function sumExpenseRows(rows: TxRow[]): SpendingAggregate {
-  const byCategoryMap = new Map<string, number>();
-  let total = 0;
-  let transactionCount = 0;
+function buildCategoryList(map: Map<string, number>): CategoryTotal[] {
+  return [...map.entries()]
+    .map(([category, total]) => ({
+      category,
+      total: round2(total)
+    }))
+    .sort((a, b) => b.total - a.total);
+}
+
+function sumRows(rows: TxRow[]): FinanceAggregate {
+  const expenseByCategoryMap = new Map<string, number>();
+  const incomeByCategoryMap = new Map<string, number>();
+
+  let totalExpenses = 0;
+  let totalIncome = 0;
+  let expenseTransactionCount = 0;
+  let incomeTransactionCount = 0;
 
   for (const row of rows) {
     const categoryKey = normalizeCategoryKey(row.category);
-
-    if (!isExpenseCategory(categoryKey)) {
-      continue;
-    }
-
     const amount = Number(row.amount ?? 0);
 
     if (!Number.isFinite(amount) || amount <= 0) {
       continue;
     }
 
-    total += amount;
-    transactionCount += 1;
+    if (isIncomeCategory(categoryKey)) {
+      totalIncome += amount;
+      incomeTransactionCount += 1;
+      incomeByCategoryMap.set(
+        categoryKey,
+        (incomeByCategoryMap.get(categoryKey) ?? 0) + amount
+      );
+      continue;
+    }
 
-    byCategoryMap.set(categoryKey, (byCategoryMap.get(categoryKey) ?? 0) + amount);
+    if (isExpenseCategory(categoryKey)) {
+      totalExpenses += amount;
+      expenseTransactionCount += 1;
+      expenseByCategoryMap.set(
+        categoryKey,
+        (expenseByCategoryMap.get(categoryKey) ?? 0) + amount
+      );
+    }
   }
 
-  const byCategory: CategoryTotal[] = [...byCategoryMap.entries()]
-    .map(([category, categoryTotal]) => ({
-      category,
-      total: round2(categoryTotal)
-    }))
-    .sort((a, b) => b.total - a.total);
-
   return {
-    total: round2(total),
-    transactionCount,
-    byCategory
+    totalExpenses: round2(totalExpenses),
+    totalIncome: round2(totalIncome),
+    balance: round2(totalIncome - totalExpenses),
+    expenseTransactionCount,
+    incomeTransactionCount,
+    totalTransactionCount: expenseTransactionCount + incomeTransactionCount,
+    expenseByCategory: buildCategoryList(expenseByCategoryMap),
+    incomeByCategory: buildCategoryList(incomeByCategoryMap)
   };
 }
 
-export async function fetchSpendingAggregate(
+export async function fetchFinanceAggregate(
   userId: string,
   rangeStartUtc: string,
   rangeEndUtcExclusive: string
-): Promise<SpendingAggregate> {
+): Promise<FinanceAggregate> {
   const { data, error } = await supabase
     .from("transactions")
     .select("amount, category")
@@ -75,8 +109,26 @@ export async function fetchSpendingAggregate(
     .lt("created_at", rangeEndUtcExclusive);
 
   if (error) {
-    throw new Error(`Failed to fetch spending aggregate: ${error.message}`);
+    throw new Error(`Failed to fetch finance aggregate: ${error.message}`);
   }
 
-  return sumExpenseRows((data ?? []) as TxRow[]);
+  return sumRows((data ?? []) as TxRow[]);
+}
+
+export async function fetchSpendingAggregate(
+  userId: string,
+  rangeStartUtc: string,
+  rangeEndUtcExclusive: string
+): Promise<SpendingAggregate> {
+  const aggregate = await fetchFinanceAggregate(
+    userId,
+    rangeStartUtc,
+    rangeEndUtcExclusive
+  );
+
+  return {
+    total: aggregate.totalExpenses,
+    transactionCount: aggregate.expenseTransactionCount,
+    byCategory: aggregate.expenseByCategory
+  };
 }

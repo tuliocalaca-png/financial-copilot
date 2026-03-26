@@ -2,10 +2,12 @@ import { supabase } from "../db/supabase";
 
 export type QueryContextKind = "spending_period";
 export type QueryDetailLevel = "summary" | "category" | "transaction";
+export type QueryType = "expense" | "income" | "balance";
 
 export type UserQueryContextRow = {
   user_id: string;
   kind: QueryContextKind;
+  query_type: QueryType;
   period_start_utc: string | null;
   period_end_utc: string | null;
   period_label: string | null;
@@ -17,6 +19,7 @@ export type UserQueryContextRow = {
 
 export type UpsertQueryContextInput = {
   kind: QueryContextKind;
+  queryType?: QueryType;
   periodStartUtc: string;
   periodEndUtc: string;
   periodLabel: string;
@@ -29,6 +32,10 @@ function mapQueryContextRow(data: Record<string, unknown>): UserQueryContextRow 
   return {
     user_id: String(data.user_id),
     kind: String(data.kind) as QueryContextKind,
+    query_type:
+      data.query_type === "income" || data.query_type === "balance"
+        ? (data.query_type as QueryType)
+        : "expense",
     period_start_utc:
       typeof data.period_start_utc === "string" ? data.period_start_utc : null,
     period_end_utc:
@@ -72,6 +79,7 @@ export async function upsertQueryContext(
   const payload = {
     user_id: userId,
     kind: input.kind,
+    query_type: input.queryType ?? "expense",
     period_start_utc: input.periodStartUtc,
     period_end_utc: input.periodEndUtc,
     period_label: input.periodLabel,

@@ -1,5 +1,8 @@
 import type { ParsedExpense } from "../core/types";
-import { inferExpenseCategoryFromText } from "./transaction-helpers";
+import {
+  inferExpenseCategoryFromText,
+  inferIncomeCategoryFromText
+} from "./transaction-helpers";
 
 function normalize(text: string): string {
   return text.toLowerCase().trim();
@@ -16,7 +19,19 @@ function hasExpenseVerb(text: string): boolean {
   );
 }
 
-function isClearlyNotExpense(text: string): boolean {
+function hasIncomeVerb(text: string): boolean {
+  return (
+    text.includes("recebi") ||
+    text.includes("entrou") ||
+    text.includes("caiu") ||
+    text.includes("ganhei") ||
+    text.includes("faturei") ||
+    text.includes("faturou") ||
+    text.includes("faturamento")
+  );
+}
+
+function isClearlyNotTransaction(text: string): boolean {
   return (
     text.includes("relatorio") ||
     text.includes("relatório") ||
@@ -40,23 +55,29 @@ function extractAmount(message: string): number | null {
 
 function extractDescription(message: string): string {
   const withoutNumber = message.replace(/\d+([.,]\d+)?/, "").trim();
-  return withoutNumber.length > 0 ? withoutNumber : "gasto";
+  return withoutNumber.length > 0 ? withoutNumber : "movimento";
 }
 
-function looksLikeShortExpense(text: string): boolean {
+function looksLikeShortTransaction(text: string): boolean {
   const words = text.split(" ");
 
+  return words.length <= 3 && /\d/.test(text);
+}
+
+function looksLikeShortIncome(text: string): boolean {
   return (
-    words.length <= 3 && // curto tipo "uber 37"
-    /\d/.test(text)      // tem número
+    looksLikeShortTransaction(text) &&
+    (text.includes("salario") ||
+      text.includes("salário") ||
+      text.includes("pix") ||
+      text.includes("reembolso"))
   );
 }
 
 export function parseExpense(message: string): ParsedExpense | null {
   const text = normalize(message);
 
-  // 🚫 bloqueia comandos
-  if (isClearlyNotExpense(text)) {
+  if (isClearlyNotTransaction(text)) {
     return null;
   }
 
@@ -65,19 +86,31 @@ export function parseExpense(message: string): ParsedExpense | null {
     return null;
   }
 
-  // ✅ aceita se:
-  // - tem verbo
-  // - OU parece gasto curto (uber 20, pizza 30)
-  if (!hasExpenseVerb(text) && !looksLikeShortExpense(text)) {
+  const isIncome =
+    hasIncomeVerb(text) || looksLikeShortIncome(text);
+
+  const isExpense =
+    hasExpenseVerb(text) || looksLikeShortTransaction(text);
+
+  if (!isIncome && !isExpense) {
     return null;
   }
 
   const description = extractDescription(message);
-  const category = inferExpenseCategoryFromText(message);
+
+  if (isIncome && !hasExpenseVerb(text)) {
+    return {
+      amount,
+      description,
+      category: inferIncomeCategoryFromText(message),
+      kind: "income"
+    };
+  }
 
   return {
     amount,
     description,
-    category
+    category: inferExpenseCategoryFromText(message),
+    kind: "expense"
   };
 }

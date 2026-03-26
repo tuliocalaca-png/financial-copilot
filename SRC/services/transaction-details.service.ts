@@ -1,14 +1,17 @@
 import { supabase } from "../db/supabase";
 import {
-  normalizeCategoryKey,
-  type ExpenseCategory
+  isIncomeCategory,
+  normalizeCategoryKey
 } from "./transaction-helpers";
+import type { TransactionKind } from "../core/types";
+import type { FinanceQueryType } from "./spending-query.service";
 
 export type SpendingTransaction = {
   amount: number;
-  category: ExpenseCategory;
+  category: string;
   description: string;
   createdAt: string;
+  kind: TransactionKind;
 };
 
 type TxRow = {
@@ -18,10 +21,11 @@ type TxRow = {
   created_at: string | null;
 };
 
-export async function fetchSpendingTransactions(
+export async function fetchFinanceTransactions(
   userId: string,
   rangeStartUtc: string,
-  rangeEndUtcExclusive: string
+  rangeEndUtcExclusive: string,
+  queryType: FinanceQueryType
 ): Promise<SpendingTransaction[]> {
   const { data, error } = await supabase
     .from("transactions")
@@ -32,7 +36,7 @@ export async function fetchSpendingTransactions(
     .order("created_at", { ascending: true });
 
   if (error) {
-    throw new Error(`Failed to fetch spending transactions: ${error.message}`);
+    throw new Error(`Failed to fetch finance transactions: ${error.message}`);
   }
 
   const result: SpendingTransaction[] = [];
@@ -44,16 +48,41 @@ export async function fetchSpendingTransactions(
       continue;
     }
 
+    const category = normalizeCategoryKey(row.category);
+    const kind: TransactionKind = isIncomeCategory(category) ? "income" : "expense";
+
+    if (queryType === "expense" && kind !== "expense") {
+      continue;
+    }
+
+    if (queryType === "income" && kind !== "income") {
+      continue;
+    }
+
     result.push({
       amount: Math.round(amount * 100) / 100,
-      category: normalizeCategoryKey(row.category),
+      category,
       description:
         typeof row.description === "string" && row.description.trim().length > 0
           ? row.description.trim()
-          : "gasto",
-      createdAt: typeof row.created_at === "string" ? row.created_at : ""
+          : "movimento",
+      createdAt: typeof row.created_at === "string" ? row.created_at : "",
+      kind
     });
   }
 
   return result;
+}
+
+export async function fetchSpendingTransactions(
+  userId: string,
+  rangeStartUtc: string,
+  rangeEndUtcExclusive: string
+): Promise<SpendingTransaction[]> {
+  return fetchFinanceTransactions(
+    userId,
+    rangeStartUtc,
+    rangeEndUtcExclusive,
+    "expense"
+  );
 }

@@ -6,6 +6,15 @@ export type ExpenseCategory =
   | "lazer"
   | "outros";
 
+export type IncomeCategory =
+  | "salario"
+  | "pix_recebido"
+  | "reembolso_recebido"
+  | "receita"
+  | "outros_recebimentos";
+
+export type TransactionCategory = ExpenseCategory | IncomeCategory;
+
 function stripAccents(text: string): string {
   return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
@@ -14,7 +23,9 @@ function normalize(text: string): string {
   return stripAccents(text.toLowerCase()).replace(/\s+/g, " ").trim();
 }
 
-export function normalizeCategoryKey(input: string | null | undefined): ExpenseCategory {
+export function normalizeCategoryKey(
+  input: string | null | undefined
+): TransactionCategory {
   const key = normalize(input ?? "");
 
   switch (key) {
@@ -30,13 +41,30 @@ export function normalizeCategoryKey(input: string | null | undefined): ExpenseC
       return "saude";
     case "lazer":
       return "lazer";
+    case "salario":
+    case "salário":
+      return "salario";
+    case "pix_recebido":
+    case "pix recebido":
+      return "pix_recebido";
+    case "reembolso_recebido":
+    case "reembolso recebido":
+      return "reembolso_recebido";
+    case "receita":
+      return "receita";
+    case "outros_recebimentos":
+    case "outros recebimentos":
+      return "outros_recebimentos";
     default:
       return "outros";
   }
 }
 
-export function isExpenseCategory(input: string | null | undefined): boolean {
+export function isExpenseCategory(
+  input: string | null | undefined
+): boolean {
   const key = normalizeCategoryKey(input);
+
   return (
     key === "alimentacao" ||
     key === "transporte" ||
@@ -47,11 +75,23 @@ export function isExpenseCategory(input: string | null | undefined): boolean {
   );
 }
 
-export function isIncomeCategory(input: string | null | undefined): boolean {
-  return !isExpenseCategory(input);
+export function isIncomeCategory(
+  input: string | null | undefined
+): boolean {
+  const key = normalizeCategoryKey(input);
+
+  return (
+    key === "salario" ||
+    key === "pix_recebido" ||
+    key === "reembolso_recebido" ||
+    key === "receita" ||
+    key === "outros_recebimentos"
+  );
 }
 
-export function naturalCategoryLabel(input: string | null | undefined): string {
+export function naturalCategoryLabel(
+  input: string | null | undefined
+): string {
   const key = normalizeCategoryKey(input);
 
   switch (key) {
@@ -65,6 +105,16 @@ export function naturalCategoryLabel(input: string | null | undefined): string {
       return "Saúde";
     case "lazer":
       return "Lazer";
+    case "salario":
+      return "Salário";
+    case "pix_recebido":
+      return "Pix recebido";
+    case "reembolso_recebido":
+      return "Reembolso recebido";
+    case "receita":
+      return "Receita";
+    case "outros_recebimentos":
+      return "Outros recebimentos";
     default:
       return "Outros";
   }
@@ -168,4 +218,42 @@ export function inferExpenseCategoryFromText(text: string): ExpenseCategory {
   }
 
   return "outros";
+}
+
+export function inferIncomeCategoryFromText(text: string): IncomeCategory {
+  const t = normalize(text);
+
+  if (
+    t.includes("salario") ||
+    t.includes("salário") ||
+    t.includes("holerite") ||
+    t.includes("folha")
+  ) {
+    return "salario";
+  }
+
+  if (
+    t.includes("pix") ||
+    t.includes("transferencia") ||
+    t.includes("transferência")
+  ) {
+    return "pix_recebido";
+  }
+
+  if (t.includes("reembolso")) {
+    return "reembolso_recebido";
+  }
+
+  if (
+    t.includes("recebi") ||
+    t.includes("entrou") ||
+    t.includes("caiu") ||
+    t.includes("ganhei") ||
+    t.includes("faturei") ||
+    t.includes("faturamento")
+  ) {
+    return "receita";
+  }
+
+  return "outros_recebimentos";
 }

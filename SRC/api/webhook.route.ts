@@ -6,8 +6,8 @@ import {
   resolveInboundMessage,
   type InboundResolution
 } from "../services/inbound-resolution.service";
-import { fetchSpendingAggregate } from "../services/spending-query.service";
-import { fetchSpendingTransactions } from "../services/transaction-details.service";
+import { fetchFinanceAggregate } from "../services/spending-query.service";
+import { fetchFinanceTransactions } from "../services/transaction-details.service";
 import { upsertReportSettings } from "../services/report-settings.service";
 import { upsertQueryContext } from "../services/query-context.service";
 import {
@@ -181,15 +181,6 @@ export async function registerWhatsappWebhookRoute(
       const resolution = await resolveInboundMessage(userId, incoming.messageText);
       const intent = intentLabelFromResolution(resolution);
 
-      request.log.info(
-        {
-          userId,
-          incomingMessage: incoming.messageText,
-          resolution
-        },
-        "resolved inbound message"
-      );
-
       await saveMessageEvent({
         userId,
         direction: "inbound",
@@ -206,7 +197,7 @@ export async function registerWhatsappWebhookRoute(
 
         responseText = resolution.result.reply;
       } else if (resolution.kind === "spending_query") {
-        const aggregate = await fetchSpendingAggregate(
+        const aggregate = await fetchFinanceAggregate(
           userId,
           resolution.period.rangeStartUtc,
           resolution.period.rangeEndUtc
@@ -214,28 +205,17 @@ export async function registerWhatsappWebhookRoute(
 
         const transactions =
           resolution.detailLevel === "transaction"
-            ? await fetchSpendingTransactions(
+            ? await fetchFinanceTransactions(
                 userId,
                 resolution.period.rangeStartUtc,
-                resolution.period.rangeEndUtc
+                resolution.period.rangeEndUtc,
+                resolution.queryType
               )
             : [];
 
-        request.log.info(
-          {
-            userId,
-            period: resolution.period,
-            detailLevel: resolution.detailLevel,
-            byCategory: resolution.byCategory,
-            transactionCount: aggregate.transactionCount,
-            transactionsFetched: transactions.length,
-            aggregate
-          },
-          "spending query data prepared"
-        );
-
         await upsertQueryContext(userId, {
           kind: "spending_period",
+          queryType: resolution.queryType,
           periodStartUtc: resolution.period.rangeStartUtc,
           periodEndUtc: resolution.period.rangeEndUtc,
           periodLabel: resolution.period.label,
@@ -245,13 +225,19 @@ export async function registerWhatsappWebhookRoute(
         });
 
         responseText = await generateAssistantReply({
-          variant: "spending",
+          variant: "finance_query",
           originalMessage: incoming.messageText,
           facts: {
             periodLabel: resolution.period.label,
-            total: aggregate.total,
-            transactionCount: aggregate.transactionCount,
-            byCategory: aggregate.byCategory,
+            queryType: resolution.queryType,
+            totalExpenses: aggregate.totalExpenses,
+            totalIncome: aggregate.totalIncome,
+            balance: aggregate.balance,
+            expenseTransactionCount: aggregate.expenseTransactionCount,
+            incomeTransactionCount: aggregate.incomeTransactionCount,
+            totalTransactionCount: aggregate.totalTransactionCount,
+            expenseByCategory: aggregate.expenseByCategory,
+            incomeByCategory: aggregate.incomeByCategory,
             detailLevel: resolution.detailLevel,
             byCategoryRequested: resolution.byCategory,
             transactions
@@ -264,7 +250,7 @@ export async function registerWhatsappWebhookRoute(
         await saveExpense(userId, resolution.parsed);
 
         responseText = await generateAssistantReply({
-          variant: "expense",
+          variant: "transaction",
           originalMessage: incoming.messageText,
           parsedExpense: resolution.parsed
         });
@@ -274,8 +260,6 @@ export async function registerWhatsappWebhookRoute(
           originalMessage: incoming.messageText
         });
       }
-
-      request.log.info({ userId, responseText }, "outbound response generated");
 
       await sendWhatsappMessage(incoming.phoneNumber, responseText);
 

@@ -11,7 +11,8 @@ import {
 } from "./report-settings.service";
 import {
   getQueryContext,
-  type QueryDetailLevel
+  type QueryDetailLevel,
+  type QueryType
 } from "./query-context.service";
 
 function stripAccents(text: string): string {
@@ -44,25 +45,18 @@ function requestsTransactionDetail(message: string): boolean {
   const text = normalize(message);
 
   return (
-    // palavras diretas
     text.includes("lancamento") ||
     text.includes("lancamentos") ||
     text.includes("lançamento") ||
     text.includes("lançamentos") ||
-
-    // comandos comuns
     text.includes("detalha") ||
     text.includes("detalhar") ||
-
-    // frases naturais
     text.includes("abre os lancamentos") ||
     text.includes("abre os lançamentos") ||
     text.includes("abre por lancamento") ||
     text.includes("abre por lançamento") ||
     text.includes("abre pro lancamento") ||
     text.includes("abre pro lançamento") ||
-
-    // fallback inteligente
     (text.includes("abre") && text.includes("lanc"))
   );
 }
@@ -86,6 +80,26 @@ function hasExpenseVerb(text: string): boolean {
     /\bgastou\b/.test(text) ||
     /\bgasto\b/.test(text) ||
     /\bgastos\b/.test(text)
+  );
+}
+
+function hasIncomeVerb(text: string): boolean {
+  return (
+    /\brecebi\b/.test(text) ||
+    /\bentrou\b/.test(text) ||
+    /\bcaiu\b/.test(text) ||
+    /\bganhei\b/.test(text) ||
+    /\bfaturei\b/.test(text) ||
+    /\bfaturou\b/.test(text)
+  );
+}
+
+function hasBalanceVerb(text: string): boolean {
+  return (
+    /\bsaldo\b/.test(text) ||
+    /\bsobrou\b/.test(text) ||
+    /\brestou\b/.test(text) ||
+    /\bresultado\b/.test(text)
   );
 }
 
@@ -121,7 +135,35 @@ function hasPeriodLanguage(text: string): boolean {
   );
 }
 
-function hasSpendingInquiryIntent(message: string): boolean {
+function detectQueryType(message: string): QueryType | null {
+  const text = normalize(message);
+
+  if (hasBalanceVerb(text) || text.includes("quanto sobrou")) {
+    return "balance";
+  }
+
+  if (
+    hasIncomeVerb(text) ||
+    text.includes("quanto recebi") ||
+    text.includes("quanto entrou") ||
+    text.includes("quanto caiu")
+  ) {
+    return "income";
+  }
+
+  if (
+    hasExpenseVerb(text) ||
+    text.includes("quanto gastei") ||
+    text.includes("quanto saiu") ||
+    text.includes("meus gastos")
+  ) {
+    return "expense";
+  }
+
+  return null;
+}
+
+function hasFinanceInquiryIntent(message: string): boolean {
   const text = normalize(message);
 
   if (
@@ -133,16 +175,9 @@ function hasSpendingInquiryIntent(message: string): boolean {
     return false;
   }
 
-  return Boolean(
-    (hasTotalLanguage(text) && hasExpenseVerb(text)) ||
-      (hasPeriodLanguage(text) && hasExpenseVerb(text)) ||
-      /\bdeu quanto\b/.test(text) ||
-      /\bquanto foi\b/.test(text) ||
-      /\bquanto saiu\b/.test(text) ||
-      /\bmeu gasto\b/.test(text) ||
-      /\bmeus gastos\b/.test(text) ||
-      /\btotal de gastos\b/.test(text) ||
-      /\btotal gasto\b/.test(text)
+  return (
+    detectQueryType(text) !== null ||
+    (hasTotalLanguage(text) && hasPeriodLanguage(text))
   );
 }
 
@@ -162,6 +197,7 @@ export type InboundResolution =
   | { kind: "report_settings"; result: Extract<ReportCommandResult, { handled: true }> }
   | {
       kind: "spending_query";
+      queryType: QueryType;
       period: ResolvedPeriod;
       byCategory: boolean;
       detailLevel: QueryDetailLevel;
@@ -190,23 +226,26 @@ export async function resolveInboundMessage(
 
   const explicitPeriod = resolvePeriodFromMessage(trimmed);
   const requestedDetailLevel = resolveRequestedDetailLevel(trimmed);
+  const queryType = detectQueryType(trimmed);
 
   if (
     explicitPeriod &&
     !parsedExpense &&
-    (hasExpenseVerb(normalized) || hasTotalLanguage(normalized))
+    (queryType !== null || hasTotalLanguage(normalized))
   ) {
     return {
       kind: "spending_query",
+      queryType: queryType ?? "expense",
       period: explicitPeriod,
       byCategory: requestedDetailLevel !== "summary",
       detailLevel: requestedDetailLevel
     };
   }
 
-  if (hasSpendingInquiryIntent(trimmed)) {
+  if (hasFinanceInquiryIntent(trimmed)) {
     return {
       kind: "spending_query",
+      queryType: queryType ?? "expense",
       period: explicitPeriod ?? defaultMonthPeriod(),
       byCategory: requestedDetailLevel !== "summary",
       detailLevel: requestedDetailLevel
@@ -223,6 +262,7 @@ export async function resolveInboundMessage(
     ) {
       return {
         kind: "spending_query",
+        queryType: context.query_type,
         period: explicitPeriod,
         byCategory: context.by_category,
         detailLevel: context.detail_level
@@ -254,6 +294,7 @@ export async function resolveInboundMessage(
 
       return {
         kind: "spending_query",
+        queryType: context.query_type,
         period: {
           rangeStartUtc: context.period_start_utc,
           rangeEndUtc: context.period_end_utc,
