@@ -255,10 +255,8 @@ export async function registerWhatsappWebhookRoute(
           parsedExpense: resolution.parsed
         });
       } else {
-        responseText = await generateAssistantReply({
-          variant: "generic",
-          originalMessage: incoming.messageText
-        });
+        responseText =
+          "Posso te ajudar com gastos, entradas e saldo 👍\n\nExemplos:\n• gastei 20 no almoço\n• recebi 500 no pix\n• quanto gastei hoje";
       }
 
       await sendWhatsappMessage(incoming.phoneNumber, responseText);

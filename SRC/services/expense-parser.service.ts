@@ -22,12 +22,14 @@ function hasExpenseVerb(text: string): boolean {
 function hasIncomeVerb(text: string): boolean {
   return (
     text.includes("recebi") ||
+    text.includes("receber") ||
+    text.includes("ganhei") ||
+    text.includes("ganho") ||
     text.includes("entrou") ||
     text.includes("caiu") ||
-    text.includes("ganhei") ||
-    text.includes("faturei") ||
-    text.includes("faturou") ||
-    text.includes("faturamento")
+    text.includes("salario") ||
+    text.includes("salário") ||
+    text.includes("pix")
   );
 }
 
@@ -60,7 +62,6 @@ function extractDescription(message: string): string {
 
 function looksLikeShortTransaction(text: string): boolean {
   const words = text.split(" ");
-
   return words.length <= 3 && /\d/.test(text);
 }
 
