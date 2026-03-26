@@ -2,9 +2,13 @@ import { FastifyInstance } from "fastify";
 import { config } from "../core/config";
 import { sendWhatsappMessage } from "../integrations/whatsapp.client";
 import { generateAssistantReply } from "../services/openai.service";
-import { resolveInboundMessage } from "../services/inbound-resolution.service";
+import {
+  resolveInboundMessage,
+  type InboundResolution
+} from "../services/inbound-resolution.service";
 import { fetchSpendingAggregate } from "../services/spending-query.service";
 import { upsertReportSettings } from "../services/report-settings.service";
+import { upsertQueryContext } from "../services/query-context.service";
 import {
   getOrCreateUserByPhone,
   saveExpense,
@@ -45,26 +49,26 @@ function extractIncomingMessage(payload: unknown): ExtractedWebhookPayload | nul
     typeof body.messageText === "string"
       ? body.messageText
       : typeof body.message === "string"
-        ? body.message
-        : typeof body.text === "string"
-          ? body.text
-          : null;
+      ? body.message
+      : typeof body.text === "string"
+      ? body.text
+      : null;
 
   const directPhone =
     typeof body.phoneNumber === "string"
       ? body.phoneNumber
       : typeof body.phone === "string"
-        ? body.phone
-        : typeof body.from === "string"
-          ? body.from
-          : null;
+      ? body.phone
+      : typeof body.from === "string"
+      ? body.from
+      : null;
 
   const directMessageId =
     typeof body.messageId === "string"
       ? body.messageId
       : typeof body.id === "string"
-        ? body.id
-        : undefined;
+      ? body.id
+      : undefined;
 
   if (directMessage && directPhone) {
     return {
@@ -120,9 +124,7 @@ function extractIncomingMessage(payload: unknown): ExtractedWebhookPayload | nul
   return null;
 }
 
-function intentLabelFromResolution(
-  resolution: ReturnType<typeof resolveInboundMessage>
-): string {
+function intentLabelFromResolution(resolution: InboundResolution): string {
   switch (resolution.kind) {
     case "report_settings":
       return "report_settings";
@@ -175,7 +177,7 @@ export async function registerWhatsappWebhookRoute(
       }
 
       const userId = await getOrCreateUserByPhone(incoming.phoneNumber);
-      const resolution = resolveInboundMessage(incoming.messageText);
+      const resolution = await resolveInboundMessage(userId, incoming.messageText);
       const intent = intentLabelFromResolution(resolution);
 
       await saveMessageEvent({
@@ -199,6 +201,15 @@ export async function registerWhatsappWebhookRoute(
           resolution.period.rangeStartUtc,
           resolution.period.rangeEndUtc
         );
+
+        await upsertQueryContext(userId, {
+          kind: "spending_period",
+          periodStartUtc: resolution.period.rangeStartUtc,
+          periodEndUtc: resolution.period.rangeEndUtc,
+          periodLabel: resolution.period.label,
+          byCategory: resolution.byCategory,
+          source: "query"
+        });
 
         responseText = await generateAssistantReply({
           variant: "spending",

@@ -1,10 +1,12 @@
-import { Intent } from "../core/types";
 import { resolveInboundMessage } from "./inbound-resolution.service";
 
-/** Compatível com logs legados; o roteamento real está em `resolveInboundMessage`. */
-export function detectIntent(messageText: string): Intent {
-  const r = resolveInboundMessage(messageText);
-  switch (r.kind) {
+export async function detectIntent(
+  userId: string,
+  messageText: string
+): Promise<string> {
+  const resolution = await resolveInboundMessage(userId, messageText);
+
+  switch (resolution.kind) {
     case "report_settings":
       return "report_settings";
     case "spending_query":
