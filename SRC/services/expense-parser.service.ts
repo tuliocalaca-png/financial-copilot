@@ -1,94 +1,85 @@
-export type ParsedExpense = {
-  amount: number;
-  description: string;
-  category: string;
-};
+import type { ParsedExpense } from "../core/types";
+import { inferExpenseCategoryFromText } from "./transaction-helpers";
 
-function guessCategory(description: string): string {
-  const text = description.toLowerCase();
-
-  if (
-    text.includes("uber") ||
-    text.includes("99") ||
-    text.includes("taxi") ||
-    text.includes("combustivel") ||
-    text.includes("combustível") ||
-    text.includes("posto") ||
-    text.includes("gasolina")
-  ) {
-    return "transporte";
-  }
-
-  if (
-    text.includes("ifood") ||
-    text.includes("ifood") ||
-    text.includes("restaurante") ||
-    text.includes("almoco") ||
-    text.includes("almoço") ||
-    text.includes("janta") ||
-    text.includes("jantar") ||
-    text.includes("cafe") ||
-    text.includes("café") ||
-    text.includes("lanche")
-  ) {
-    return "alimentacao";
-  }
-
-  if (
-    text.includes("farmacia") ||
-    text.includes("farmácia") ||
-    text.includes("remedio") ||
-    text.includes("remédio") ||
-    text.includes("medico") ||
-    text.includes("médico")
-  ) {
-    return "saude";
-  }
-
-  if (
-    text.includes("cinema") ||
-    text.includes("bar") ||
-    text.includes("balada") ||
-    text.includes("show") ||
-    text.includes("lazer")
-  ) {
-    return "lazer";
-  }
-
-  if (
-    text.includes("mercado") ||
-    text.includes("supermercado")
-  ) {
-    return "mercado";
-  }
-
-  return "outros";
+function countNumericAmountLikeTokens(message: string): number {
+  const numbers = message.match(/\d+([.,]\d+)?/g);
+  return numbers?.length ?? 0;
 }
 
-export function parseExpense(message: string): ParsedExpense | null {
-  if (!message) return null;
+function parseAmountToken(raw: string): number | null {
+  const normalized = raw.replace(/\./g, "").replace(",", ".");
+  const value = Number(normalized);
 
-  const normalized = message.toLowerCase().trim();
-  const numbers = normalized.match(/\d+([.,]\d+)?/g);
-
-  if (!numbers) return null;
-
-  // Se houver mais de um valor, não tenta salvar errado.
-  if (numbers.length > 1) {
+  if (!Number.isFinite(value) || value <= 0) {
     return null;
   }
 
-  const amount = parseFloat(numbers[0].replace(",", "."));
+  return Math.round(value * 100) / 100;
+}
 
-  if (Number.isNaN(amount)) return null;
+function extractFirstAmount(message: string): number | null {
+  const match = message.match(/\d+([.,]\d+)?/);
+  if (!match) {
+    return null;
+  }
 
-  const description = normalized.replace(numbers[0], "").trim();
+  return parseAmountToken(match[0]);
+}
 
-  if (!description) return null;
+function cleanDescription(description: string): string {
+  return description
+    .replace(/^(no|na|em|do|da|pro|pra|para|o|a)\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractDescription(message: string): string {
+  const firstNumber = message.match(/\d+([.,]\d+)?/);
+  if (!firstNumber || firstNumber.index == null) {
+    return "gasto";
+  }
+
+  const afterAmount = message.slice(firstNumber.index + firstNumber[0].length).trim();
+  const cleaned = cleanDescription(afterAmount);
+
+  if (cleaned.length > 0) {
+    return cleaned;
+  }
+
+  const beforeAmount = message.slice(0, firstNumber.index).trim();
+  const fallback = cleanDescription(
+    beforeAmount
+      .replace(/\bgastei\b/gi, "")
+      .replace(/\bgasto\b/gi, "")
+      .replace(/\bpaguei\b/gi, "")
+      .trim()
+  );
+
+  return fallback.length > 0 ? fallback : "gasto";
+}
+
+export function parseExpense(message: string): ParsedExpense | null {
+  const trimmed = message.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  if (countNumericAmountLikeTokens(trimmed) !== 1) {
+    return null;
+  }
+
+  const amount = extractFirstAmount(trimmed);
+  if (amount == null) {
+    return null;
+  }
+
+  const description = extractDescription(trimmed);
+  const category = inferExpenseCategoryFromText(trimmed);
 
   return {
     amount,
     description,
-    category: guessCategory(description)
+    category
   };
 }

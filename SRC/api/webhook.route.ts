@@ -7,6 +7,7 @@ import {
   type InboundResolution
 } from "../services/inbound-resolution.service";
 import { fetchSpendingAggregate } from "../services/spending-query.service";
+import { fetchSpendingTransactions } from "../services/transaction-details.service";
 import { upsertReportSettings } from "../services/report-settings.service";
 import { upsertQueryContext } from "../services/query-context.service";
 import {
@@ -202,12 +203,22 @@ export async function registerWhatsappWebhookRoute(
           resolution.period.rangeEndUtc
         );
 
+        const transactions =
+          resolution.detailLevel === "transaction"
+            ? await fetchSpendingTransactions(
+                userId,
+                resolution.period.rangeStartUtc,
+                resolution.period.rangeEndUtc
+              )
+            : [];
+
         await upsertQueryContext(userId, {
           kind: "spending_period",
           periodStartUtc: resolution.period.rangeStartUtc,
           periodEndUtc: resolution.period.rangeEndUtc,
           periodLabel: resolution.period.label,
           byCategory: resolution.byCategory,
+          detailLevel: resolution.detailLevel,
           source: "query"
         });
 
@@ -218,7 +229,10 @@ export async function registerWhatsappWebhookRoute(
             periodLabel: resolution.period.label,
             total: aggregate.total,
             transactionCount: aggregate.transactionCount,
-            byCategory: resolution.byCategory ? aggregate.byCategory : []
+            byCategory: aggregate.byCategory,
+            detailLevel: resolution.detailLevel,
+            byCategoryRequested: resolution.byCategory,
+            transactions
           }
         });
       } else if (resolution.kind === "multi_expense_warning") {

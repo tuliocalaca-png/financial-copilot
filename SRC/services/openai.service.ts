@@ -1,5 +1,8 @@
 import OpenAI from "openai";
 import { config } from "../core/config";
+import { naturalCategoryLabel } from "./transaction-helpers";
+import type { QueryDetailLevel } from "./query-context.service";
+import type { SpendingTransaction } from "./transaction-details.service";
 
 const openai = new OpenAI({
   apiKey: config.openAiApiKey
@@ -36,6 +39,9 @@ export type SpendingFactsPayload = {
   total: number;
   transactionCount: number;
   byCategory: { category: string; total: number }[];
+  detailLevel: QueryDetailLevel;
+  byCategoryRequested: boolean;
+  transactions?: SpendingTransaction[];
 };
 
 export type AssistantRequest =
@@ -61,45 +67,28 @@ function brl(value: number): string {
   }).format(value);
 }
 
-function normalizeLabel(text: string): string {
+function titleCase(text: string): string {
   const trimmed = text.trim();
-  if (!trimmed) return "";
-  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
-}
-
-function naturalCategory(category: string): string {
-  const key = category.trim().toLowerCase();
-
-  switch (key) {
-    case "alimentacao":
-      return "Alimentação";
-    case "transporte":
-      return "Transporte";
-    case "saude":
-      return "Saúde";
-    case "lazer":
-      return "Lazer";
-    case "mercado":
-      return "Mercado";
-    default:
-      return "Outros";
-  }
+  return trimmed.length > 0 ? trimmed.charAt(0).toUpperCase() + trimmed.slice(1) : "Gasto";
 }
 
 function formatExpenseReply(parsedExpense: ParsedExpensePayload): string {
-  const description = normalizeLabel(parsedExpense.description);
-  return `Anotei 💸 ${brl(parsedExpense.amount)} no ${description}.`;
+  return `Anotei 💸 ${brl(parsedExpense.amount)} em ${titleCase(parsedExpense.description)}.`;
 }
 
 function formatNoDataReply(periodLabel: string): string {
   return `No período “${periodLabel}” não encontrei gastos registrados 👀\n\nQuando gastar, manda tipo: “gastei 20 no almoço”.`;
 }
 
-function formatSpendingReply(facts: SpendingFactsPayload): string {
-  if (facts.transactionCount === 0) {
-    return formatNoDataReply(facts.periodLabel);
-  }
+function formatSummaryReply(facts: SpendingFactsPayload): string {
+  return [
+    `📊 ${facts.periodLabel}`,
+    `Total: ${brl(facts.total)}`,
+    `Lançamentos: ${facts.transactionCount}`
+  ].join("\n");
+}
 
+function formatCategoryReply(facts: SpendingFactsPayload): string {
   const lines = [
     `📊 ${facts.periodLabel}`,
     `Total: ${brl(facts.total)}`,
@@ -108,13 +97,74 @@ function formatSpendingReply(facts: SpendingFactsPayload): string {
 
   if (facts.byCategory.length > 0) {
     lines.push("Por categoria:");
-
     for (const row of facts.byCategory.slice(0, 10)) {
-      lines.push(`• ${naturalCategory(row.category)}: ${brl(row.total)}`);
+      lines.push(`• ${naturalCategoryLabel(row.category)}: ${brl(row.total)}`);
     }
   }
 
   return lines.join("\n");
+}
+
+function formatTransactionReply(facts: SpendingFactsPayload): string {
+  const transactions = facts.transactions ?? [];
+
+  const lines = [
+    `📊 ${facts.periodLabel}`,
+    `Total: ${brl(facts.total)}`,
+    `Lançamentos: ${facts.transactionCount}`
+  ];
+
+  if (transactions.length === 0) {
+    return lines.join("\n");
+  }
+
+  if (facts.byCategoryRequested) {
+    const grouped = new Map<string, SpendingTransaction[]>();
+
+    for (const tx of transactions) {
+      const key = tx.category;
+      const list = grouped.get(key) ?? [];
+      list.push(tx);
+      grouped.set(key, list);
+    }
+
+    lines.push("Por categoria:");
+
+    for (const row of facts.byCategory) {
+      const txs = grouped.get(row.category) ?? [];
+      if (txs.length === 0) continue;
+
+      lines.push(`${naturalCategoryLabel(row.category)} — ${brl(row.total)}`);
+      for (const tx of txs) {
+        lines.push(`• ${titleCase(tx.description)} — ${brl(tx.amount)}`);
+      }
+    }
+
+    return lines.join("\n");
+  }
+
+  lines.push("Lançamentos:");
+  for (const tx of transactions.slice(0, 20)) {
+    lines.push(`• ${titleCase(tx.description)} — ${brl(tx.amount)}`);
+  }
+
+  return lines.join("\n");
+}
+
+function formatSpendingReply(facts: SpendingFactsPayload): string {
+  if (facts.transactionCount === 0) {
+    return formatNoDataReply(facts.periodLabel);
+  }
+
+  if (facts.detailLevel === "transaction") {
+    return formatTransactionReply(facts);
+  }
+
+  if (facts.detailLevel === "category") {
+    return formatCategoryReply(facts);
+  }
+
+  return formatSummaryReply(facts);
 }
 
 export async function generateAssistantReply(
@@ -139,7 +189,8 @@ export async function generateAssistantReply(
       "- sugira exemplos concretos como:",
       '  - "gastei 20 no almoço"',
       '  - "quanto gastei hoje"',
-      '  - "quanto gastei no mês passado por categoria"'
+      '  - "quanto gastei no mês passado por categoria"',
+      '  - "abre os lançamentos por categoria"'
     ].join("\n")
   ];
 

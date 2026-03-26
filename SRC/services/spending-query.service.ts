@@ -1,5 +1,8 @@
 import { supabase } from "../db/supabase";
-import { isExpenseCategory } from "./transaction-helpers";
+import {
+  isExpenseCategory,
+  normalizeCategoryKey
+} from "./transaction-helpers";
 
 export type CategoryTotal = {
   category: string;
@@ -21,18 +24,13 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-function normalizeCategory(category: string | null | undefined): string {
-  const normalized = typeof category === "string" ? category.trim().toLowerCase() : "";
-  return normalized || "outros";
-}
-
 function sumExpenseRows(rows: TxRow[]): SpendingAggregate {
   const byCategoryMap = new Map<string, number>();
   let total = 0;
   let transactionCount = 0;
 
   for (const row of rows) {
-    const categoryKey = normalizeCategory(row.category);
+    const categoryKey = normalizeCategoryKey(row.category);
 
     if (!isExpenseCategory(categoryKey)) {
       continue;

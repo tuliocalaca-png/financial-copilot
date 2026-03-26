@@ -16,6 +16,7 @@ import {
   type UserReportSettingsRow
 } from "./report-settings.service";
 import { upsertQueryContext } from "./query-context.service";
+import { naturalCategoryLabel } from "./transaction-helpers";
 import { supabase } from "../db/supabase";
 import { saveMessageEvent } from "./persistence.service";
 
@@ -52,7 +53,7 @@ function buildReportBody(
     lines.push("Por categoria:");
 
     for (const row of aggregate.byCategory.slice(0, 15)) {
-      lines.push(`• ${row.category}: R$${row.total.toFixed(2)}`);
+      lines.push(`• ${naturalCategoryLabel(row.category)}: R$${row.total.toFixed(2)}`);
     }
   }
 
@@ -202,6 +203,7 @@ export async function runScheduledReportsTick(nowUtc: Date = new Date()): Promis
           periodEndUtc: period.rangeEndUtc,
           periodLabel: period.label,
           byCategory: fresh.include_categories,
+          detailLevel: fresh.include_categories ? "category" : "summary",
           source: "report"
         });
         await patchLastRuns(row.user_id, { last_run_daily: todayKey });
@@ -239,6 +241,7 @@ export async function runScheduledReportsTick(nowUtc: Date = new Date()): Promis
           periodEndUtc: period.rangeEndUtc,
           periodLabel: period.label,
           byCategory: fresh.include_categories,
+          detailLevel: fresh.include_categories ? "category" : "summary",
           source: "report"
         });
         await patchLastRuns(row.user_id, { last_run_weekly: previousMondayKey });
@@ -275,6 +278,7 @@ export async function runScheduledReportsTick(nowUtc: Date = new Date()): Promis
           periodEndUtc: period.rangeEndUtc,
           periodLabel: period.label,
           byCategory: fresh.include_categories,
+          detailLevel: fresh.include_categories ? "category" : "summary",
           source: "report"
         });
         await patchLastRuns(row.user_id, { last_run_monthly: previousMonthKey });

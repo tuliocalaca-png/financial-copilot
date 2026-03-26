@@ -9,7 +9,10 @@ import {
   parseReportSettingsCommand,
   type ReportCommandResult
 } from "./report-settings.service";
-import { getQueryContext } from "./query-context.service";
+import {
+  getQueryContext,
+  type QueryDetailLevel
+} from "./query-context.service";
 
 function stripAccents(text: string): string {
   return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -25,7 +28,7 @@ function countNumericAmountLikeTokens(message: string): number {
   return numbers?.length ?? 0;
 }
 
-export function messageRequestsCategoryBreakdown(message: string): boolean {
+function requestsCategoryBreakdown(message: string): boolean {
   const text = normalize(message);
 
   return (
@@ -33,9 +36,35 @@ export function messageRequestsCategoryBreakdown(message: string): boolean {
     text.includes("por categorias") ||
     text.includes("separado por categoria") ||
     text.includes("separadas por categoria") ||
-    text.includes("separado por categorias") ||
-    text.includes("separadas por categorias")
+    text.includes("quais categorias")
   );
+}
+
+function requestsTransactionDetail(message: string): boolean {
+  const text = normalize(message);
+
+  return (
+    text.includes("lancamento") ||
+    text.includes("lancamentos") ||
+    text.includes("lançamento") ||
+    text.includes("lançamentos") ||
+    text.includes("detalha isso") ||
+    text.includes("detalha") ||
+    text.includes("abre os lancamentos") ||
+    text.includes("abra os lancamentos")
+  );
+}
+
+function resolveRequestedDetailLevel(message: string): QueryDetailLevel {
+  if (requestsTransactionDetail(message)) {
+    return "transaction";
+  }
+
+  if (requestsCategoryBreakdown(message)) {
+    return "category";
+  }
+
+  return "summary";
 }
 
 function hasExpenseVerb(text: string): boolean {
@@ -80,7 +109,7 @@ function hasPeriodLanguage(text: string): boolean {
   );
 }
 
-export function hasSpendingInquiryIntent(message: string): boolean {
+function hasSpendingInquiryIntent(message: string): boolean {
   const text = normalize(message);
 
   if (
@@ -105,29 +134,26 @@ export function hasSpendingInquiryIntent(message: string): boolean {
   );
 }
 
-function isContextualCategoryFollowUp(message: string): boolean {
+function isContextualFollowUp(message: string): boolean {
   const text = normalize(message);
 
   return (
-    text.includes("categoria") ||
-    text.includes("categorias") ||
-    text.includes("por categoria") ||
-    text.includes("por categorias") ||
+    requestsCategoryBreakdown(text) ||
+    requestsTransactionDetail(text) ||
     text.includes("detalha isso") ||
-    text.includes("detalha") ||
     text.includes("abre isso") ||
-    text.includes("abre os lancamentos") ||
-    text.includes("abra os lancamentos") ||
-    text.includes("separa isso") ||
-    text.includes("separa por categoria") ||
-    text.includes("quebra por categoria") ||
-    text.includes("quais categorias")
+    text.includes("separa isso")
   );
 }
 
 export type InboundResolution =
   | { kind: "report_settings"; result: Extract<ReportCommandResult, { handled: true }> }
-  | { kind: "spending_query"; period: ResolvedPeriod; byCategory: boolean }
+  | {
+      kind: "spending_query";
+      period: ResolvedPeriod;
+      byCategory: boolean;
+      detailLevel: QueryDetailLevel;
+    }
   | { kind: "expense"; parsed: ParsedExpense }
   | { kind: "multi_expense_warning" }
   | { kind: "generic" };
@@ -150,29 +176,49 @@ export async function resolveInboundMessage(
     return { kind: "multi_expense_warning" };
   }
 
-  const periodFromText = resolvePeriodFromMessage(trimmed);
+  const explicitPeriod = resolvePeriodFromMessage(trimmed);
+  const requestedDetailLevel = resolveRequestedDetailLevel(trimmed);
 
   if (
-    periodFromText &&
+    explicitPeriod &&
     !parsedExpense &&
     (hasExpenseVerb(normalized) || hasTotalLanguage(normalized))
   ) {
     return {
       kind: "spending_query",
-      period: periodFromText,
-      byCategory: messageRequestsCategoryBreakdown(trimmed)
+      period: explicitPeriod,
+      byCategory: requestedDetailLevel !== "summary",
+      detailLevel: requestedDetailLevel
     };
   }
 
   if (hasSpendingInquiryIntent(trimmed)) {
     return {
       kind: "spending_query",
-      period: resolvePeriodFromMessage(trimmed) ?? defaultMonthPeriod(),
-      byCategory: messageRequestsCategoryBreakdown(trimmed)
+      period: explicitPeriod ?? defaultMonthPeriod(),
+      byCategory: requestedDetailLevel !== "summary",
+      detailLevel: requestedDetailLevel
     };
   }
 
-  if (isContextualCategoryFollowUp(trimmed)) {
+  if (explicitPeriod && !parsedExpense) {
+    const context = await getQueryContext(userId);
+
+    if (
+      context &&
+      context.kind === "spending_period" &&
+      (normalized.startsWith("e ") || normalized.startsWith("e,") || hasPeriodLanguage(normalized))
+    ) {
+      return {
+        kind: "spending_query",
+        period: explicitPeriod,
+        byCategory: context.by_category,
+        detailLevel: context.detail_level
+      };
+    }
+  }
+
+  if (isContextualFollowUp(trimmed)) {
     const context = await getQueryContext(userId);
 
     if (
@@ -182,6 +228,16 @@ export async function resolveInboundMessage(
       context.period_end_utc &&
       context.period_label
     ) {
+      const nextDetailLevel =
+        requestedDetailLevel === "summary"
+          ? context.detail_level
+          : requestedDetailLevel;
+
+      const nextByCategory =
+        nextDetailLevel === "summary"
+          ? false
+          : requestsCategoryBreakdown(trimmed) || context.by_category || nextDetailLevel === "transaction";
+
       return {
         kind: "spending_query",
         period: {
@@ -189,7 +245,8 @@ export async function resolveInboundMessage(
           rangeEndUtc: context.period_end_utc,
           label: context.period_label
         },
-        byCategory: true
+        byCategory: nextByCategory,
+        detailLevel: nextDetailLevel
       };
     }
   }
