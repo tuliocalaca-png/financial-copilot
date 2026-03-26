@@ -1,7 +1,10 @@
 import { FastifyInstance } from "fastify";
+import { config } from "../core/config";
 import { sendWhatsappMessage } from "../integrations/whatsapp.client";
-import { parseExpense } from "../services/expense-parser.service";
 import { generateAssistantReply } from "../services/openai.service";
+import { resolveInboundMessage } from "../services/inbound-resolution.service";
+import { fetchSpendingAggregate } from "../services/spending-query.service";
+import { upsertReportSettings } from "../services/report-settings.service";
 import {
   getOrCreateUserByPhone,
   saveExpense,
@@ -117,15 +120,21 @@ function extractIncomingMessage(payload: unknown): ExtractedWebhookPayload | nul
   return null;
 }
 
-function isCategoryQuery(text: string): boolean {
-  const normalized = text.toLowerCase();
-
-  return (
-    normalized.includes("categoria") ||
-    normalized.includes("categorias") ||
-    normalized.includes("separado por categoria") ||
-    normalized.includes("por categoria")
-  );
+function intentLabelFromResolution(
+  resolution: ReturnType<typeof resolveInboundMessage>
+): string {
+  switch (resolution.kind) {
+    case "report_settings":
+      return "report_settings";
+    case "spending_query":
+      return "spending_query";
+    case "expense":
+      return "expense";
+    case "multi_expense_warning":
+      return "multi_expense_blocked";
+    default:
+      return "unknown";
+  }
 }
 
 export async function registerWhatsappWebhookRoute(
@@ -138,7 +147,7 @@ export async function registerWhatsappWebhookRoute(
     const token = query["hub.verify_token"];
     const challenge = query["hub.challenge"];
 
-    if (mode === "subscribe" && token === "meu_token_123") {
+    if (mode === "subscribe" && token === config.verifyToken) {
       return reply.type("text/plain").send(challenge ?? "");
     }
 
@@ -166,9 +175,8 @@ export async function registerWhatsappWebhookRoute(
       }
 
       const userId = await getOrCreateUserByPhone(incoming.phoneNumber);
-
-      const parsedExpense = parseExpense(incoming.messageText);
-      const intent = parsedExpense ? "expense" : "unknown";
+      const resolution = resolveInboundMessage(incoming.messageText);
+      const intent = intentLabelFromResolution(resolution);
 
       await saveMessageEvent({
         userId,
@@ -177,33 +185,48 @@ export async function registerWhatsappWebhookRoute(
         intent
       });
 
-      if (parsedExpense) {
-        await saveExpense(userId, parsedExpense);
-      }
+      let responseText: string;
 
-      // Regra dura: ainda não temos visão confiável por categoria
-      if (isCategoryQuery(incoming.messageText)) {
-        const responseText =
-          "Ainda não consigo separar por categoria com segurança 👀\n\n" +
-          "Mas posso te mostrar isso quando essa visão estiver pronta 👍";
+      if (resolution.kind === "report_settings") {
+        if (Object.keys(resolution.result.patch).length > 0) {
+          await upsertReportSettings(userId, resolution.result.patch);
+        }
 
-        await sendWhatsappMessage(incoming.phoneNumber, responseText);
-
-        await saveMessageEvent({
+        responseText = resolution.result.reply;
+      } else if (resolution.kind === "spending_query") {
+        const aggregate = await fetchSpendingAggregate(
           userId,
-          direction: "outbound",
-          messageText: responseText,
-          intent: "unknown"
+          resolution.period.rangeStartUtc,
+          resolution.period.rangeEndUtc
+        );
+
+        responseText = await generateAssistantReply({
+          variant: "spending",
+          originalMessage: incoming.messageText,
+          facts: {
+            periodLabel: resolution.period.label,
+            total: aggregate.total,
+            transactionCount: aggregate.transactionCount,
+            byCategory: resolution.byCategory ? aggregate.byCategory : []
+          }
         });
+      } else if (resolution.kind === "multi_expense_warning") {
+        responseText =
+          "Peguei que você mandou mais de um gasto 👀\n\nPra não errar, me manda um por vez 👍";
+      } else if (resolution.kind === "expense") {
+        await saveExpense(userId, resolution.parsed);
 
-        return reply.status(200).send({ ok: true });
+        responseText = await generateAssistantReply({
+          variant: "expense",
+          originalMessage: incoming.messageText,
+          parsedExpense: resolution.parsed
+        });
+      } else {
+        responseText = await generateAssistantReply({
+          variant: "generic",
+          originalMessage: incoming.messageText
+        });
       }
-
-      const responseText = await generateAssistantReply({
-        intent,
-        originalMessage: incoming.messageText,
-        parsedExpense: parsedExpense ?? undefined
-      });
 
       await sendWhatsappMessage(incoming.phoneNumber, responseText);
 

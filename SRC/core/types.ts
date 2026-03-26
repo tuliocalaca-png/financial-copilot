@@ -1,4 +1,9 @@
-export type Intent = "expense" | "daily_limit_query" | "unknown";
+export type Intent =
+  | "expense"
+  | "spending_query"
+  | "report_settings"
+  | "multi_expense_blocked"
+  | "unknown";
 
 export interface IncomingMessage {
   phoneNumber: string;

@@ -5,7 +5,7 @@ export async function getOrCreateUserByPhone(phoneNumber: string): Promise<strin
   const { data: existing, error: findError } = await supabase
     .from("users")
     .select("id")
-    .or(`phone.eq.${phoneNumber},phone_number.eq.${phoneNumber}`)
+    .eq("phone_number", phoneNumber)
     .maybeSingle();
 
   if (findError) {
@@ -19,7 +19,6 @@ export async function getOrCreateUserByPhone(phoneNumber: string): Promise<strin
   const { data: inserted, error: insertError } = await supabase
     .from("users")
     .insert({
-      phone: phoneNumber,
       phone_number: phoneNumber
     })
     .select("id")

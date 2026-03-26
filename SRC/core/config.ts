@@ -16,5 +16,7 @@ export const config = {
   supabaseUrl: getEnv("SUPABASE_URL"),
   supabaseKey: getEnv("SUPABASE_KEY"),
   whatsappToken: getEnv("WHATSAPP_TOKEN"),
-  whatsappPhoneId: getEnv("WHATSAPP_PHONE_ID")
+  whatsappPhoneId: getEnv("WHATSAPP_PHONE_ID"),
+  /** Opcional. Se vazio, POST /internal/cron/reports responde 503. */
+  cronSecret: process.env.CRON_SECRET ?? ""
 };

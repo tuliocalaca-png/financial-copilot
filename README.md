@@ -1,35 +1,23 @@
-# Financial Copilot Backend (MVP)
+# Financial Copilot Backend
 
-Backend em Node.js + TypeScript para um copiloto financeiro no WhatsApp.
+Backend em Node.js + TypeScript para um copiloto financeiro no **WhatsApp**.
 
 ## Stack
 
-- Node.js
-- TypeScript
-- Fastify
-- Supabase
-- OpenAI
+- Node.js 20+
+- TypeScript, Fastify
+- Supabase (Postgres)
+- OpenAI (só para “vestir” fatos já calculados em linguagem natural)
 - WhatsApp Cloud API
+- Luxon (fusos e períodos em `America/Sao_Paulo`)
 
-## Features implementadas
+## O que esta versão faz
 
-- `POST /webhook/whatsapp` para receber mensagens
-- Detecção de intenção:
-  - `expense`
-  - `daily_limit_query`
-  - `unknown`
-- Parser de despesa:
-  - extração de valor
-  - categorização simples por palavra-chave
-- Persistência no Supabase:
-  - `users`
-  - `transactions`
-  - `message_events`
-- Cálculo de limite diário:
-  - `monthly_budget = 3000`
-  - `daily_limit = (monthly_budget - total_spent_month) / remaining_days`
-- Geração de resposta com OpenAI (tom sem imposição, focado em consequências)
-- Envio da resposta via WhatsApp Cloud API
+- **Registro de gasto** (um valor por mensagem; vários valores continuam bloqueados).
+- **Consultas por período** com totais e quantidade de lançamentos vindos do banco; opcional **por categoria** (agregação real em `transactions.category`).
+- **Relatórios automáticos** configuráveis (diário / semanal / mensal), horário, fuso e inclusão de categorias.
+- **Agendamento**: `setInterval` de 1 minuto no processo + `POST /internal/cron/reports` para cron externo (Railway, GitHub Actions, etc.).
+- **Sem inventar números**: a OpenAI recebe JSON com fatos; consultas vazias têm resposta determinística antes do modelo.
 
 ## Estrutura
 
@@ -38,6 +26,7 @@ SRC/
   api/
     server.ts
     webhook.route.ts
+    cron.route.ts
   core/
     config.ts
     types.ts
@@ -46,43 +35,51 @@ SRC/
   integrations/
     whatsapp.client.ts
   services/
-    daily-limit.service.ts
+    daily-limit.service.ts      # legado (não usado nas respostas gerais do webhook)
     expense-parser.service.ts
+    inbound-resolution.service.ts
     intent.service.ts
     openai.service.ts
     persistence.service.ts
+    period-resolver.service.ts
+    report-scheduler.service.ts
+    report-settings.service.ts
+    spending-query.service.ts
+    transaction-helpers.ts
   index.ts
+supabase/
+  schema.sql
+  migrations/002_user_report_settings.sql
 ```
 
 ## Pré-requisitos
 
-- Node.js 20+
 - Projeto Supabase
-- App configurado no WhatsApp Cloud API
-- Chave da OpenAI
+- App WhatsApp Cloud API
+- Chave OpenAI
 
-## Configuração
+## Variáveis de ambiente
 
-1. Copie o arquivo de ambiente:
+Copie `.env.example` para `.env` e preencha:
 
-```bash
-cp .env.example .env
-```
+| Variável | Obrigatória | Descrição |
+|----------|-------------|-----------|
+| `OPENAI_API_KEY` | sim | |
+| `SUPABASE_URL` | sim | |
+| `SUPABASE_KEY` | sim | **service_role** no servidor |
+| `WHATSAPP_TOKEN` | sim | |
+| `WHATSAPP_PHONE_ID` | sim | |
+| `PORT` | não | padrão `3000` |
+| `CRON_SECRET` | não | se vazio, `POST /internal/cron/reports` responde **503** |
 
-2. Preencha as variáveis:
+## SQL (Supabase)
 
-- `OPENAI_API_KEY`
-- `SUPABASE_URL`
-- `SUPABASE_KEY`
-- `WHATSAPP_TOKEN`
-- `WHATSAPP_PHONE_ID`
-- `PORT` (opcional, padrão 3000)
+1. **Projeto novo**: execute o arquivo [`supabase/schema.sql`](supabase/schema.sql) inteiro no SQL Editor.
+2. **Projeto já existente** com o schema antigo: execute também a migração [`supabase/migrations/002_user_report_settings.sql`](supabase/migrations/002_user_report_settings.sql).
 
-## Schema Supabase (SQL)
+A tabela `user_report_settings` guarda:
 
-Fonte única: copie e execute o arquivo [`supabase/schema.sql`](supabase/schema.sql) inteiro no SQL Editor do Supabase (projeto novo, uma vez).
-
-Use `SUPABASE_KEY` com a **service_role** no backend; com RLS ativo e sem políticas públicas, chaves `anon` não conseguem ler/escrever essas tabelas.
+- `user_id`, `is_enabled`, `frequencies` (`daily` \| `weekly` \| `monthly`), `time_of_day` (`HH:mm`), `timezone`, `include_categories`, `last_run_*`, `created_at`, `updated_at`.
 
 ## Instalação e execução
 
@@ -91,43 +88,87 @@ npm install
 npm run dev
 ```
 
-Servidor sobe em `http://localhost:3000`.
-
 Healthcheck:
 
 ```bash
 curl http://localhost:3000/health
 ```
 
-## Exemplo de webhook (payload direto)
+Build / produção:
+
+```bash
+npm run build
+npm start
+```
+
+## Endpoints
+
+| Método | Caminho | Descrição |
+|--------|---------|-----------|
+| `GET` | `/health` | Saúde |
+| `GET` | `/webhook/whatsapp` | Verificação Meta |
+| `POST` | `/webhook/whatsapp` | Mensagens |
+| `POST` | `/internal/cron/reports` | Dispara envio de relatórios (header `x-cron-secret: <CRON_SECRET>` ou `Authorization: Bearer <CRON_SECRET>`) |
+
+## Regras de negócio (resumo)
+
+- **Fuso padrão** dos períodos na conversa: `America/Sao_Paulo`.
+- **Semana** na conversa e no relatório semanal: **segunda → domingo** (semana civil com início na segunda).
+- **Relatório diário** (agendado): gastos **do dia até o minuto do disparo** no fuso do usuário.
+- **Relatório semanal** (agendado): só **segundas**; período = **semana anterior** completa.
+- **Relatório mensal** (agendado): só **dia 1**; período = **mês civil anterior** completo.
+- **Categorias em consultas**: só categorias que existem em transações de **despesa** no intervalo (entradas com categoria de receita são excluídas, como no serviço de limite legado).
+
+## Como testar
+
+### Webhook (JSON direto)
 
 ```bash
 curl -X POST http://localhost:3000/webhook/whatsapp \
   -H "Content-Type: application/json" \
-  -d '{
-    "phoneNumber": "5511999999999",
-    "messageText": "gastei 50 no uber"
-  }'
+  -d '{"phoneNumber":"5511999999999","messageText":"gastei 50 no uber"}'
 ```
 
-Também existe suporte a um formato comum de payload do webhook oficial do WhatsApp Cloud.
+### Consultas (com dados no banco)
 
-## Comportamento esperado
+- `quanto gastei hoje` / `ontem`
+- `quanto gastei no dia 10 de março`
+- `quanto gastei em março` / `no mês de março`
+- `quanto gastei no mês atual` / `mês anterior`
+- `quanto gastei na semana passada` / `esta semana até agora`
+- `quanto gastei hoje por categoria`
 
-- `"gastei 50 no uber"`:
-  - identifica `expense`
-  - extrai valor `50`
-  - categoria provável `transporte`
-  - salva em `transactions`
-- `"quanto posso gastar hoje"`:
-  - identifica `daily_limit_query`
-  - calcula limite diário com base no gasto do mês
-- sempre salva eventos de entrada e saída em `message_events`
-- envia resposta final para o WhatsApp do usuário
+### Relatórios (configuração)
+
+- `quero relatório diário às 20h`
+- `quero relatório semanal e mensal às 9h`
+- `quero só semanal`
+- `desative meus relatórios`
+- `mude meu relatório para 19h`
+- `quero relatório diário por categoria`
+
+Confira a linha em `user_report_settings` no Supabase após cada comando.
+
+### Cron manual
+
+```bash
+curl -X POST http://localhost:3000/internal/cron/reports \
+  -H "x-cron-secret: SEU_CRON_SECRET"
+```
+
+### Railway
+
+1. Defina `CRON_SECRET` nas variáveis do serviço.
+2. Crie um **Cron Job** que chame `POST https://<seu-app>.railway.app/internal/cron/reports` com o header acima (ex.: a cada 1–5 minutos). O processo também roda o scheduler interno a cada 1 minuto; o endpoint serve para redundância e para ambientes que dormem (use o cron do provedor se o dyno for efêmero).
+
+## Limitações explícitas
+
+- O **resolver de período** cobre as formas descritas nos exemplos e variações comuns em PT-BR; frases muito ambíguas caem no **mês atual** quando há intenção clara de consulta (`quanto gastei` sem data explícita).
+- Comandos de **relatório** são interpretados por regras determinísticas em português; frases fora do padrão podem cair na resposta genérica (sem inventar configuração).
 
 ## Scripts
 
-- `npm run dev`: desenvolvimento com watch
-- `npm run build`: compila TypeScript
-- `npm run start`: executa build
-- `npm run typecheck`: checagem de tipos
+- `npm run dev` — desenvolvimento com watch
+- `npm run build` — compila para `dist/`
+- `npm start` — executa `dist/SRC/index.js`
+- `npm run typecheck` — checagem de tipos

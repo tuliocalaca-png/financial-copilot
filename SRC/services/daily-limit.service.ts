@@ -1,29 +1,6 @@
 import { DailyLimitResult } from "../core/types";
 import { supabase } from "../db/supabase";
-
-/** Positive amounts with these categories count as income (same table as expenses; no schema change). */
-const INCOME_CATEGORIES = new Set([
-  "receita",
-  "receitas",
-  "income",
-  "entrada",
-  "entradas",
-  "salario",
-  "rendimento",
-  "deposito"
-]);
-
-function normalizeCategoryKey(category: string): string {
-  return category
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-}
-
-function isIncomeCategory(category: string): boolean {
-  return INCOME_CATEGORIES.has(normalizeCategoryKey(category));
-}
+import { isIncomeCategory } from "./transaction-helpers";
 
 function getMonthBounds() {
   const now = new Date();
