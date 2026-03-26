@@ -1,6 +1,6 @@
 import Fastify from "fastify";
-import { registerCronRoutes } from "./cron.route";
 import { registerWhatsappWebhookRoute } from "./webhook.route";
+import { registerCronRoutes } from "./cron.route";
 
 export async function buildServer() {
   const app = Fastify({ logger: true });
