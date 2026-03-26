@@ -48,10 +48,11 @@ function requestsTransactionDetail(message: string): boolean {
     text.includes("lancamentos") ||
     text.includes("lançamento") ||
     text.includes("lançamentos") ||
-    text.includes("detalha isso") ||
     text.includes("detalha") ||
-    text.includes("abre os lancamentos") ||
-    text.includes("abra os lancamentos")
+    text.includes("detalhar") ||
+    (text.includes("abre") && text.includes("lanc")) ||
+    text.includes("abre pro lancamento") ||
+    text.includes("abre por lancamento")
   );
 }
 
@@ -236,7 +237,9 @@ export async function resolveInboundMessage(
       const nextByCategory =
         nextDetailLevel === "summary"
           ? false
-          : requestsCategoryBreakdown(trimmed) || context.by_category || nextDetailLevel === "transaction";
+          : requestsCategoryBreakdown(trimmed) ||
+            context.by_category ||
+            nextDetailLevel === "transaction";
 
       return {
         kind: "spending_query",
