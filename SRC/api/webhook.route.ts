@@ -50,26 +50,26 @@ function extractIncomingMessage(payload: unknown): ExtractedWebhookPayload | nul
     typeof body.messageText === "string"
       ? body.messageText
       : typeof body.message === "string"
-      ? body.message
-      : typeof body.text === "string"
-      ? body.text
-      : null;
+        ? body.message
+        : typeof body.text === "string"
+          ? body.text
+          : null;
 
   const directPhone =
     typeof body.phoneNumber === "string"
       ? body.phoneNumber
       : typeof body.phone === "string"
-      ? body.phone
-      : typeof body.from === "string"
-      ? body.from
-      : null;
+        ? body.phone
+        : typeof body.from === "string"
+          ? body.from
+          : null;
 
   const directMessageId =
     typeof body.messageId === "string"
       ? body.messageId
       : typeof body.id === "string"
-      ? body.id
-      : undefined;
+        ? body.id
+        : undefined;
 
   if (directMessage && directPhone) {
     return {
@@ -181,6 +181,15 @@ export async function registerWhatsappWebhookRoute(
       const resolution = await resolveInboundMessage(userId, incoming.messageText);
       const intent = intentLabelFromResolution(resolution);
 
+      request.log.info(
+        {
+          userId,
+          incomingMessage: incoming.messageText,
+          resolution
+        },
+        "resolved inbound message"
+      );
+
       await saveMessageEvent({
         userId,
         direction: "inbound",
@@ -211,6 +220,19 @@ export async function registerWhatsappWebhookRoute(
                 resolution.period.rangeEndUtc
               )
             : [];
+
+        request.log.info(
+          {
+            userId,
+            period: resolution.period,
+            detailLevel: resolution.detailLevel,
+            byCategory: resolution.byCategory,
+            transactionCount: aggregate.transactionCount,
+            transactionsFetched: transactions.length,
+            aggregate
+          },
+          "spending query data prepared"
+        );
 
         await upsertQueryContext(userId, {
           kind: "spending_period",
@@ -252,6 +274,8 @@ export async function registerWhatsappWebhookRoute(
           originalMessage: incoming.messageText
         });
       }
+
+      request.log.info({ userId, responseText }, "outbound response generated");
 
       await sendWhatsappMessage(incoming.phoneNumber, responseText);
 
