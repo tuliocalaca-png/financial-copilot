@@ -1,9 +1,12 @@
 import { supabase } from "../db/supabase";
-import { normalizeCategoryKey } from "./transaction-helpers";
+import {
+  normalizeCategoryKey,
+  type ExpenseCategory
+} from "./transaction-helpers";
 
 export type SpendingTransaction = {
   amount: number;
-  category: string;
+  category: ExpenseCategory;
   description: string;
   createdAt: string;
 };
@@ -32,23 +35,25 @@ export async function fetchSpendingTransactions(
     throw new Error(`Failed to fetch spending transactions: ${error.message}`);
   }
 
-  return ((data ?? []) as TxRow[])
-    .map((row) => {
-      const amount = Number(row.amount ?? 0);
+  const result: SpendingTransaction[] = [];
 
-      if (!Number.isFinite(amount) || amount <= 0) {
-        return null;
-      }
+  for (const row of (data ?? []) as TxRow[]) {
+    const amount = Number(row.amount ?? 0);
 
-      return {
-        amount: Math.round(amount * 100) / 100,
-        category: normalizeCategoryKey(row.category),
-        description:
-          typeof row.description === "string" && row.description.trim().length > 0
-            ? row.description.trim()
-            : "gasto",
-        createdAt: typeof row.created_at === "string" ? row.created_at : ""
-      };
-    })
-    .filter((row): row is SpendingTransaction => row !== null);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      continue;
+    }
+
+    result.push({
+      amount: Math.round(amount * 100) / 100,
+      category: normalizeCategoryKey(row.category),
+      description:
+        typeof row.description === "string" && row.description.trim().length > 0
+          ? row.description.trim()
+          : "gasto",
+      createdAt: typeof row.created_at === "string" ? row.created_at : ""
+    });
+  }
+
+  return result;
 }

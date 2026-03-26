@@ -47,6 +47,10 @@ export function isExpenseCategory(input: string | null | undefined): boolean {
   );
 }
 
+export function isIncomeCategory(input: string | null | undefined): boolean {
+  return !isExpenseCategory(input);
+}
+
 export function naturalCategoryLabel(input: string | null | undefined): string {
   const key = normalizeCategoryKey(input);
 
