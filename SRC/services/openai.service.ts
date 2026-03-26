@@ -4,7 +4,6 @@ import { naturalCategoryLabel } from "./transaction-helpers";
 import type { QueryDetailLevel } from "./query-context.service";
 import type { SpendingTransaction } from "./transaction-details.service";
 import type { FinanceQueryType } from "./spending-query.service";
-import type { ParsedExpensePayload as _ParsedExpensePayload } from "./openai.service";
 
 const openai = new OpenAI({
   apiKey: config.openAiApiKey
@@ -81,7 +80,7 @@ function titleCase(text: string): string {
   return trimmed.length > 0 ? trimmed.charAt(0).toUpperCase() + trimmed.slice(1) : "Movimento";
 }
 
-function formatTransactionReply(parsedExpense: ParsedExpensePayload): string {
+function formatRecordedTransactionReply(parsedExpense: ParsedExpensePayload): string {
   if (parsedExpense.kind === "income") {
     return `Anotei 💰 entrada de ${brl(parsedExpense.amount)} em ${titleCase(parsedExpense.description)}.`;
   }
@@ -126,7 +125,10 @@ function formatSummaryReply(facts: FinanceFactsPayload): string {
   ].join("\n");
 }
 
-function formatCategoryList(title: string, rows: { category: string; total: number }[]): string[] {
+function formatCategoryList(
+  title: string,
+  rows: { category: string; total: number }[]
+): string[] {
   const lines: string[] = [title];
 
   for (const row of rows.slice(0, 10)) {
@@ -199,7 +201,7 @@ function formatTransactionBlock(
   return lines;
 }
 
-function formatTransactionReply(facts: FinanceFactsPayload): string {
+function formatDetailedFinanceReply(facts: FinanceFactsPayload): string {
   const transactions = facts.transactions ?? [];
   const lines: string[] = [];
 
@@ -238,8 +240,8 @@ function formatTransactionReply(facts: FinanceFactsPayload): string {
       facts.queryType === "income"
         ? facts.incomeByCategory
         : facts.queryType === "balance"
-        ? [...facts.incomeByCategory, ...facts.expenseByCategory]
-        : facts.expenseByCategory;
+          ? [...facts.incomeByCategory, ...facts.expenseByCategory]
+          : facts.expenseByCategory;
 
     for (const row of categories) {
       const txs = grouped.get(row.category) ?? [];
@@ -264,15 +266,15 @@ function formatFinanceReply(facts: FinanceFactsPayload): string {
     facts.queryType === "income"
       ? facts.incomeTransactionCount === 0
       : facts.queryType === "balance"
-      ? facts.totalTransactionCount === 0
-      : facts.expenseTransactionCount === 0;
+        ? facts.totalTransactionCount === 0
+        : facts.expenseTransactionCount === 0;
 
   if (noData) {
     return formatNoDataReply(facts.periodLabel, facts.queryType);
   }
 
   if (facts.detailLevel === "transaction") {
-    return formatTransactionReply(facts);
+    return formatDetailedFinanceReply(facts);
   }
 
   if (facts.detailLevel === "category") {
@@ -286,7 +288,7 @@ export async function generateAssistantReply(
   input: AssistantRequest
 ): Promise<string> {
   if (input.variant === "transaction") {
-    return formatTransactionReply(input.parsedExpense as any);
+    return formatRecordedTransactionReply(input.parsedExpense);
   }
 
   if (input.variant === "finance_query") {
