@@ -15,6 +15,7 @@ import {
   mapReportSettingsRow,
   type UserReportSettingsRow
 } from "./report-settings.service";
+import { upsertQueryContext } from "./query-context.service";
 import { supabase } from "../db/supabase";
 import { saveMessageEvent } from "./persistence.service";
 
@@ -167,7 +168,6 @@ export async function runScheduledReportsTick(nowUtc: Date = new Date()): Promis
       continue;
     }
 
-    // Recarrega estado fresco para reduzir risco de decisão com dado velho
     const fresh = await getReportSettings(row.user_id);
 
     if (!fresh || !fresh.is_enabled || fresh.frequencies.length === 0) {
@@ -196,11 +196,18 @@ export async function runScheduledReportsTick(nowUtc: Date = new Date()): Promis
         );
 
         await sendAndPersistReport(row.user_id, row.phone_number, text, "report_daily");
+        await upsertQueryContext(row.user_id, {
+          kind: "spending_period",
+          periodStartUtc: period.rangeStartUtc,
+          periodEndUtc: period.rangeEndUtc,
+          periodLabel: period.label,
+          byCategory: fresh.include_categories,
+          source: "report"
+        });
         await patchLastRuns(row.user_id, { last_run_daily: todayKey });
       }
 
       if (frequency === "weekly") {
-        // semanal roda na segunda, trazendo semana anterior completa
         if (localNow.weekday !== 1) {
           continue;
         }
@@ -226,11 +233,18 @@ export async function runScheduledReportsTick(nowUtc: Date = new Date()): Promis
         );
 
         await sendAndPersistReport(row.user_id, row.phone_number, text, "report_weekly");
+        await upsertQueryContext(row.user_id, {
+          kind: "spending_period",
+          periodStartUtc: period.rangeStartUtc,
+          periodEndUtc: period.rangeEndUtc,
+          periodLabel: period.label,
+          byCategory: fresh.include_categories,
+          source: "report"
+        });
         await patchLastRuns(row.user_id, { last_run_weekly: previousMondayKey });
       }
 
       if (frequency === "monthly") {
-        // mensal roda no dia 1, trazendo mês anterior completo
         if (localNow.day !== 1) {
           continue;
         }
@@ -255,6 +269,14 @@ export async function runScheduledReportsTick(nowUtc: Date = new Date()): Promis
         );
 
         await sendAndPersistReport(row.user_id, row.phone_number, text, "report_monthly");
+        await upsertQueryContext(row.user_id, {
+          kind: "spending_period",
+          periodStartUtc: period.rangeStartUtc,
+          periodEndUtc: period.rangeEndUtc,
+          periodLabel: period.label,
+          byCategory: fresh.include_categories,
+          source: "report"
+        });
         await patchLastRuns(row.user_id, { last_run_monthly: previousMonthKey });
       }
     }
@@ -263,12 +285,6 @@ export async function runScheduledReportsTick(nowUtc: Date = new Date()): Promis
 
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
 
-/**
- * Scheduler interno opcional.
- * Recomendação para produção:
- * - preferir cron externo chamando /internal/cron/reports
- * - usar esse intervalo apenas em dev/local ou se conscientemente aceito
- */
 export function startReportScheduler(): void {
   const enabled = process.env.ENABLE_INTERNAL_REPORT_SCHEDULER === "true";
 

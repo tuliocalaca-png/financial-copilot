@@ -9,6 +9,7 @@ import {
   parseReportSettingsCommand,
   type ReportCommandResult
 } from "./report-settings.service";
+import { getQueryContext } from "./query-context.service";
 
 function stripAccents(text: string): string {
   return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -85,25 +86,43 @@ export function hasSpendingInquiryIntent(message: string): boolean {
   if (
     /\brelatorio\b/.test(text) ||
     /\brelatorios\b/.test(text) ||
-    /\brelatório\b/.test(message.toLowerCase()) ||
-    /\brelatórios\b/.test(message.toLowerCase())
+    /relatório/.test(message.toLowerCase()) ||
+    /relatórios/.test(message.toLowerCase())
   ) {
     return false;
   }
 
-  // consulta financeira explícita
-  const strongSpendingSignals =
+  return Boolean(
     (hasTotalLanguage(text) && hasExpenseVerb(text)) ||
-    (hasPeriodLanguage(text) && hasExpenseVerb(text)) ||
-    /\bdeu quanto\b/.test(text) ||
-    /\bquanto foi\b/.test(text) ||
-    /\bquanto saiu\b/.test(text) ||
-    /\bmeu gasto\b/.test(text) ||
-    /\bmeus gastos\b/.test(text) ||
-    /\btotal de gastos\b/.test(text) ||
-    /\btotal gasto\b/.test(text);
+      (hasPeriodLanguage(text) && hasExpenseVerb(text)) ||
+      /\bdeu quanto\b/.test(text) ||
+      /\bquanto foi\b/.test(text) ||
+      /\bquanto saiu\b/.test(text) ||
+      /\bmeu gasto\b/.test(text) ||
+      /\bmeus gastos\b/.test(text) ||
+      /\btotal de gastos\b/.test(text) ||
+      /\btotal gasto\b/.test(text)
+  );
+}
 
-  return strongSpendingSignals;
+function isContextualCategoryFollowUp(message: string): boolean {
+  const text = normalize(message);
+
+  return (
+    text.includes("categoria") ||
+    text.includes("categorias") ||
+    text.includes("por categoria") ||
+    text.includes("por categorias") ||
+    text.includes("detalha isso") ||
+    text.includes("detalha") ||
+    text.includes("abre isso") ||
+    text.includes("abre os lancamentos") ||
+    text.includes("abra os lancamentos") ||
+    text.includes("separa isso") ||
+    text.includes("separa por categoria") ||
+    text.includes("quebra por categoria") ||
+    text.includes("quais categorias")
+  );
 }
 
 export type InboundResolution =
@@ -113,27 +132,31 @@ export type InboundResolution =
   | { kind: "multi_expense_warning" }
   | { kind: "generic" };
 
-export function resolveInboundMessage(message: string): InboundResolution {
+export async function resolveInboundMessage(
+  userId: string,
+  message: string
+): Promise<InboundResolution> {
   const trimmed = message.trim();
   const normalized = normalize(trimmed);
 
-  // 1) comandos de relatório têm prioridade máxima
   const reportCmd = parseReportSettingsCommand(trimmed);
   if (reportCmd.handled) {
     return { kind: "report_settings", result: reportCmd };
   }
 
-  // 2) tenta parsear gasto uma vez só
   const parsedExpense = parseExpense(trimmed);
 
-  // 3) multi-gasto: mais de um número e parser não conseguiu estruturar
   if (countNumericAmountLikeTokens(trimmed) > 1 && !parsedExpense) {
     return { kind: "multi_expense_warning" };
   }
 
-  // 4) consulta por período explícito + linguagem de gasto
   const periodFromText = resolvePeriodFromMessage(trimmed);
-  if (periodFromText && !parsedExpense && (hasExpenseVerb(normalized) || hasTotalLanguage(normalized))) {
+
+  if (
+    periodFromText &&
+    !parsedExpense &&
+    (hasExpenseVerb(normalized) || hasTotalLanguage(normalized))
+  ) {
     return {
       kind: "spending_query",
       period: periodFromText,
@@ -141,7 +164,6 @@ export function resolveInboundMessage(message: string): InboundResolution {
     };
   }
 
-  // 5) consulta de gastos sem período explícito → aplica default do produto
   if (hasSpendingInquiryIntent(trimmed)) {
     return {
       kind: "spending_query",
@@ -150,11 +172,31 @@ export function resolveInboundMessage(message: string): InboundResolution {
     };
   }
 
-  // 6) gasto simples
+  if (isContextualCategoryFollowUp(trimmed)) {
+    const context = await getQueryContext(userId);
+
+    if (
+      context &&
+      context.kind === "spending_period" &&
+      context.period_start_utc &&
+      context.period_end_utc &&
+      context.period_label
+    ) {
+      return {
+        kind: "spending_query",
+        period: {
+          rangeStartUtc: context.period_start_utc,
+          rangeEndUtc: context.period_end_utc,
+          label: context.period_label
+        },
+        byCategory: true
+      };
+    }
+  }
+
   if (parsedExpense) {
     return { kind: "expense", parsed: parsedExpense };
   }
 
-  // 7) fallback genérico
   return { kind: "generic" };
 }

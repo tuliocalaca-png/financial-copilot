@@ -16,31 +16,13 @@ ESTILO:
 - nunca prolixo
 
 REGRAS ABSOLUTAS:
-- Use APENAS números, totais, períodos e categorias que aparecerem no bloco DADOS_DO_SISTEMA (JSON).
-- Não invente valores.
+- Não invente números.
 - Não invente totais.
 - Não invente categorias.
-- Não arredonde diferente do que veio.
-- Não fale de limite diário, orçamento ou “quanto pode gastar” a menos que isso esteja explicitamente no JSON.
+- Não finja que o sistema sabe algo que não foi enviado.
 - Nunca diga “não entendi”.
 - Nunca peça para reformular.
-- Nunca finja que o sistema sabe algo que não foi enviado no JSON.
-- Se faltar dado, diga com honestidade que o sistema não trouxe aquele número.
-
-MAPEAMENTO DE CATEGORIA INTERNA:
-- alimentacao -> alimentação
-- transporte -> transporte
-- saude -> saúde
-- lazer -> lazer
-- mercado -> mercado
-- outros -> outros
-
-REGRAS DE SAÍDA:
-- Se for registro de gasto, confirme de forma curta e natural.
-- Se for consulta de gastos, responda com os números exatos recebidos.
-- Se houver categorias, mencione de forma curta e natural.
-- Se não houver categorias, não invente nenhuma.
-- Se for uma mensagem genérica, responda de forma útil e curta, sugerindo exemplos concretos.
+- Se faltar dado, diga com honestidade que o sistema ainda não trouxe aquele número.
 `.trim();
 
 export type ParsedExpensePayload = {
@@ -72,85 +54,94 @@ export type AssistantRequest =
       originalMessage: string;
     };
 
-function spendingFallbackNoData(periodLabel: string): string {
-  return (
-    `No período “${periodLabel}” não tenho nenhum gasto registrado 👀\n\n` +
-    `Quando gastar, manda tipo: “gastei 20 no almoço”.`
-  );
+function brl(value: number): string {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL"
+  }).format(value);
 }
 
-export async function generateAssistantReply(input: AssistantRequest): Promise<string> {
-  if (input.variant === "spending") {
-    const { facts } = input;
+function normalizeLabel(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
 
-    if (facts.transactionCount === 0) {
-      return spendingFallbackNoData(facts.periodLabel);
+function naturalCategory(category: string): string {
+  const key = category.trim().toLowerCase();
+
+  switch (key) {
+    case "alimentacao":
+      return "Alimentação";
+    case "transporte":
+      return "Transporte";
+    case "saude":
+      return "Saúde";
+    case "lazer":
+      return "Lazer";
+    case "mercado":
+      return "Mercado";
+    default:
+      return "Outros";
+  }
+}
+
+function formatExpenseReply(parsedExpense: ParsedExpensePayload): string {
+  const description = normalizeLabel(parsedExpense.description);
+  return `Anotei 💸 ${brl(parsedExpense.amount)} no ${description}.`;
+}
+
+function formatNoDataReply(periodLabel: string): string {
+  return `No período “${periodLabel}” não encontrei gastos registrados 👀\n\nQuando gastar, manda tipo: “gastei 20 no almoço”.`;
+}
+
+function formatSpendingReply(facts: SpendingFactsPayload): string {
+  if (facts.transactionCount === 0) {
+    return formatNoDataReply(facts.periodLabel);
+  }
+
+  const lines = [
+    `📊 ${facts.periodLabel}`,
+    `Total: ${brl(facts.total)}`,
+    `Lançamentos: ${facts.transactionCount}`
+  ];
+
+  if (facts.byCategory.length > 0) {
+    lines.push("Por categoria:");
+
+    for (const row of facts.byCategory.slice(0, 10)) {
+      lines.push(`• ${naturalCategory(row.category)}: ${brl(row.total)}`);
     }
   }
 
-  const userBlocks: string[] = [];
+  return lines.join("\n");
+}
 
+export async function generateAssistantReply(
+  input: AssistantRequest
+): Promise<string> {
   if (input.variant === "expense") {
-    userBlocks.push(
-      "DADOS_DO_SISTEMA:",
-      JSON.stringify(
-        {
-          tipo: "registro_gasto",
-          valor: input.parsedExpense.amount,
-          descricao: input.parsedExpense.description,
-          categoria_interna: input.parsedExpense.category
-        },
-        null,
-        0
-      ),
-      `MENSAGEM_ORIGINAL: ${JSON.stringify(input.originalMessage)}`,
-      "Tarefa: confirme o registro usando somente os campos acima, de forma curta e natural."
-    );
-  } else if (input.variant === "spending") {
-    userBlocks.push(
-      "DADOS_DO_SISTEMA:",
-      JSON.stringify(
-        {
-          tipo: "consulta_periodo",
-          periodo_rotulo: input.facts.periodLabel,
-          total_gastos: input.facts.total,
-          quantidade_lancamentos: input.facts.transactionCount,
-          por_categoria: input.facts.byCategory
-        },
-        null,
-        0
-      ),
-      `MENSAGEM_ORIGINAL: ${JSON.stringify(input.originalMessage)}`,
-      [
-        "Tarefa:",
-        "- resuma os gastos do período usando os números exatos",
-        "- se houver categorias, mencione de forma curta",
-        "- não invente categorias que não vieram",
-        "- mantenha a resposta curta e útil"
-      ].join("\n")
-    );
-  } else {
-    userBlocks.push(
-      "DADOS_DO_SISTEMA:",
-      JSON.stringify(
-        {
-          tipo: "sem_dados_financeiros"
-        },
-        null,
-        0
-      ),
-      `MENSAGEM_ORIGINAL: ${JSON.stringify(input.originalMessage)}`,
-      [
-        "Tarefa:",
-        "- responda de forma útil e curta",
-        "- não invente valores financeiros",
-        "- sugira exemplos concretos como:",
-        '  - "gastei 20 no almoço"',
-        '  - "quanto gastei hoje"',
-        '  - "quanto gastei no mês passado por categoria"'
-      ].join("\n")
-    );
+    return formatExpenseReply(input.parsedExpense);
   }
+
+  if (input.variant === "spending") {
+    return formatSpendingReply(input.facts);
+  }
+
+  const userBlocks = [
+    "DADOS_DO_SISTEMA:",
+    JSON.stringify({ tipo: "sem_dados_financeiros" }, null, 0),
+    `MENSAGEM_ORIGINAL: ${JSON.stringify(input.originalMessage)}`,
+    [
+      "Tarefa:",
+      "- responda de forma útil e curta",
+      "- não invente valores financeiros",
+      "- sugira exemplos concretos como:",
+      '  - "gastei 20 no almoço"',
+      '  - "quanto gastei hoje"',
+      '  - "quanto gastei no mês passado por categoria"'
+    ].join("\n")
+  ];
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
