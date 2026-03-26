@@ -1,81 +1,74 @@
 import type { ParsedExpense } from "../core/types";
 import { inferExpenseCategoryFromText } from "./transaction-helpers";
 
-function countNumericAmountLikeTokens(message: string): number {
-  const numbers = message.match(/\d+([.,]\d+)?/g);
-  return numbers?.length ?? 0;
+function normalize(text: string): string {
+  return text.toLowerCase().trim();
 }
 
-function parseAmountToken(raw: string): number | null {
-  const normalized = raw.replace(/\./g, "").replace(",", ".");
-  const value = Number(normalized);
+function hasExpenseIntent(text: string): boolean {
+  return (
+    text.includes("gastei") ||
+    text.includes("gasto") ||
+    text.includes("paguei") ||
+    text.includes("pagar") ||
+    text.includes("custou") ||
+    text.includes("comprei")
+  );
+}
 
-  if (!Number.isFinite(value) || value <= 0) {
-    return null;
-  }
+function isClearlyNotExpense(text: string): boolean {
+  return (
+    text.includes("relatorio") ||
+    text.includes("relatório") ||
+    text.includes("lembrete") ||
+    text.includes("todo dia") ||
+    text.includes("todo dia") ||
+    text.includes("às") ||
+    text.includes("agenda") ||
+    text.includes("configurar")
+  );
+}
+
+function extractAmount(message: string): number | null {
+  const match = message.match(/\d+([.,]\d+)?/);
+  if (!match) return null;
+
+  const value = Number(match[0].replace(",", "."));
+  if (!Number.isFinite(value) || value <= 0) return null;
 
   return Math.round(value * 100) / 100;
 }
 
-function extractFirstAmount(message: string): number | null {
-  const match = message.match(/\d+([.,]\d+)?/);
-  if (!match) {
-    return null;
-  }
-
-  return parseAmountToken(match[0]);
-}
-
-function cleanDescription(description: string): string {
-  return description
-    .replace(/^(no|na|em|do|da|pro|pra|para|o|a)\s+/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function extractDescription(message: string): string {
-  const firstNumber = message.match(/\d+([.,]\d+)?/);
-  if (!firstNumber || firstNumber.index == null) {
-    return "gasto";
+  const parts = message.split(/\d+([.,]\d+)?/);
+
+  if (parts.length > 1) {
+    return parts[parts.length - 1].trim() || "gasto";
   }
 
-  const afterAmount = message.slice(firstNumber.index + firstNumber[0].length).trim();
-  const cleaned = cleanDescription(afterAmount);
-
-  if (cleaned.length > 0) {
-    return cleaned;
-  }
-
-  const beforeAmount = message.slice(0, firstNumber.index).trim();
-  const fallback = cleanDescription(
-    beforeAmount
-      .replace(/\bgastei\b/gi, "")
-      .replace(/\bgasto\b/gi, "")
-      .replace(/\bpaguei\b/gi, "")
-      .trim()
-  );
-
-  return fallback.length > 0 ? fallback : "gasto";
+  return "gasto";
 }
 
 export function parseExpense(message: string): ParsedExpense | null {
-  const trimmed = message.trim();
+  const text = normalize(message);
 
-  if (!trimmed) {
+  // 🚫 trava forte
+  if (isClearlyNotExpense(text)) {
     return null;
   }
 
-  if (countNumericAmountLikeTokens(trimmed) !== 1) {
+  // 🚫 exige intenção
+  if (!hasExpenseIntent(text)) {
     return null;
   }
 
-  const amount = extractFirstAmount(trimmed);
+  const amount = extractAmount(text);
   if (amount == null) {
     return null;
   }
 
-  const description = extractDescription(trimmed);
-  const category = inferExpenseCategoryFromText(trimmed);
+  const description = extractDescription(message);
+  const category = inferExpenseCategoryFromText(message);
 
   return {
     amount,
