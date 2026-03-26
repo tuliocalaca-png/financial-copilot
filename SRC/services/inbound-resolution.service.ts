@@ -44,15 +44,26 @@ function requestsTransactionDetail(message: string): boolean {
   const text = normalize(message);
 
   return (
+    // palavras diretas
     text.includes("lancamento") ||
     text.includes("lancamentos") ||
     text.includes("lançamento") ||
     text.includes("lançamentos") ||
+
+    // comandos comuns
     text.includes("detalha") ||
     text.includes("detalhar") ||
-    (text.includes("abre") && text.includes("lanc")) ||
+
+    // frases naturais
+    text.includes("abre os lancamentos") ||
+    text.includes("abre os lançamentos") ||
+    text.includes("abre por lancamento") ||
+    text.includes("abre por lançamento") ||
     text.includes("abre pro lancamento") ||
-    text.includes("abre por lancamento")
+    text.includes("abre pro lançamento") ||
+
+    // fallback inteligente
+    (text.includes("abre") && text.includes("lanc"))
   );
 }
 
