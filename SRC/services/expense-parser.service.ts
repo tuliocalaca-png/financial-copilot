@@ -5,7 +5,7 @@ function normalize(text: string): string {
   return text.toLowerCase().trim();
 }
 
-function hasExpenseIntent(text: string): boolean {
+function hasExpenseVerb(text: string): boolean {
   return (
     text.includes("gastei") ||
     text.includes("gasto") ||
@@ -21,11 +21,10 @@ function isClearlyNotExpense(text: string): boolean {
     text.includes("relatorio") ||
     text.includes("relatório") ||
     text.includes("lembrete") ||
-    text.includes("todo dia") ||
-    text.includes("todo dia") ||
-    text.includes("às") ||
     text.includes("agenda") ||
-    text.includes("configurar")
+    text.includes("configurar") ||
+    text.includes("todo dia") ||
+    text.includes("às")
   );
 }
 
@@ -40,30 +39,36 @@ function extractAmount(message: string): number | null {
 }
 
 function extractDescription(message: string): string {
-  const parts = message.split(/\d+([.,]\d+)?/);
+  const withoutNumber = message.replace(/\d+([.,]\d+)?/, "").trim();
+  return withoutNumber.length > 0 ? withoutNumber : "gasto";
+}
 
-  if (parts.length > 1) {
-    return parts[parts.length - 1].trim() || "gasto";
-  }
+function looksLikeShortExpense(text: string): boolean {
+  const words = text.split(" ");
 
-  return "gasto";
+  return (
+    words.length <= 3 && // curto tipo "uber 37"
+    /\d/.test(text)      // tem número
+  );
 }
 
 export function parseExpense(message: string): ParsedExpense | null {
   const text = normalize(message);
 
-  // 🚫 trava forte
+  // 🚫 bloqueia comandos
   if (isClearlyNotExpense(text)) {
-    return null;
-  }
-
-  // 🚫 exige intenção
-  if (!hasExpenseIntent(text)) {
     return null;
   }
 
   const amount = extractAmount(text);
   if (amount == null) {
+    return null;
+  }
+
+  // ✅ aceita se:
+  // - tem verbo
+  // - OU parece gasto curto (uber 20, pizza 30)
+  if (!hasExpenseVerb(text) && !looksLikeShortExpense(text)) {
     return null;
   }
 
