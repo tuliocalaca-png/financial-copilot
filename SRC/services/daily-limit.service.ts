@@ -1,57 +1,70 @@
+import { DateTime } from "luxon";
 import { DailyLimitResult } from "../core/types";
-import { supabase } from "../db/supabase";
-import { isIncomeCategory } from "./transaction-helpers";
+import { fetchFinanceAggregate } from "./spending-query.service";
+import { getBudgetSettings } from "./budget-settings.service";
+import { fetchPlannedForecastSummary } from "./planned-transaction.service";
+import { DEFAULT_TIMEZONE } from "./period-resolver.service";
 
 function getMonthBounds() {
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const now = DateTime.now().setZone(DEFAULT_TIMEZONE);
+  const monthStart = now.startOf("month");
+  const monthEnd = monthStart.plus({ months: 1 });
   return { now, monthStart, monthEnd };
 }
 
-function calculateRemainingDays(now: Date): number {
-  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  return Math.max(lastDay - now.getDate() + 1, 1);
+function calculateRemainingDays(now: DateTime): number {
+  return Math.max(now.endOf("month").day - now.day + 1, 1);
 }
 
 export async function calculateDailyLimit(userId: string): Promise<DailyLimitResult> {
+  const settings = await getBudgetSettings(userId);
   const { now, monthStart, monthEnd } = getMonthBounds();
 
-  const { data, error } = await supabase
-    .from("transactions")
-    .select("amount, category")
-    .eq("user_id", userId)
-    .gte("created_at", monthStart.toISOString())
-    .lt("created_at", monthEnd.toISOString());
+  const aggregate = await fetchFinanceAggregate(
+    userId,
+    monthStart.toUTC().toISO()!,
+    monthEnd.toUTC().toISO()!
+  );
 
-  if (error) {
-    throw new Error(`Failed to fetch monthly transactions: ${error.message}`);
-  }
+  const planned = await fetchPlannedForecastSummary(
+    userId,
+    now.toISODate()!,
+    monthEnd.minus({ days: 1 }).toISODate()!
+  );
 
-  let totalIncome = 0;
-  let totalExpenses = 0;
-
-  for (const row of data ?? []) {
-    const amount = Number(row.amount ?? 0);
-    const category = typeof row.category === "string" ? row.category : "";
-    if (isIncomeCategory(category)) {
-      totalIncome += amount;
-    } else {
-      totalExpenses += amount;
-    }
-  }
-
-  const fallbackMonthlyBudget = 3000;
-  const balance = totalIncome > 0 ? totalIncome - totalExpenses : fallbackMonthlyBudget - totalExpenses;
-  const totalSpentMonth = totalExpenses;
-  const remainingMonthBudget = balance;
   const remainingDaysInMonth = calculateRemainingDays(now);
-  const dailyLimit = remainingMonthBudget / remainingDaysInMonth;
+  const baseRemaining = aggregate.balance + planned.projectedBalance;
+
+  if (!settings || !settings.is_daily_limit_enabled) {
+    return {
+      totalSpentMonth: aggregate.totalExpenses,
+      remainingMonthBudget: baseRemaining,
+      remainingDaysInMonth,
+      dailyLimit: 0,
+      mode: settings?.daily_limit_mode ?? "auto",
+      isEnabled: false
+    };
+  }
+
+  if (settings.daily_limit_mode === "manual" && (settings.manual_daily_limit ?? 0) > 0) {
+    return {
+      totalSpentMonth: aggregate.totalExpenses,
+      remainingMonthBudget: baseRemaining,
+      remainingDaysInMonth,
+      dailyLimit: settings.manual_daily_limit ?? 0,
+      mode: "manual",
+      isEnabled: true
+    };
+  }
+
+  const dailyLimit = baseRemaining / remainingDaysInMonth;
 
   return {
-    totalSpentMonth,
-    remainingMonthBudget,
+    totalSpentMonth: aggregate.totalExpenses,
+    remainingMonthBudget: baseRemaining,
     remainingDaysInMonth,
-    dailyLimit
+    dailyLimit: Math.round(dailyLimit * 100) / 100,
+    mode: "auto",
+    isEnabled: true
   };
 }

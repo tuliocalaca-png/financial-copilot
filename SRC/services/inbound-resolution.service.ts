@@ -15,13 +15,11 @@ import {
   type QueryType
 } from "./query-context.service";
 
-function stripAccents(text: string): string {
-  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-}
-
-function normalize(text: string): string {
-  return stripAccents(text.toLowerCase()).replace(/\s+/g, " ").trim();
-}
+type ActualQueryType = "expense" | "income" | "balance" | "daily_limit";
+type ForecastQueryType = "payable" | "receivable" | "projected_balance";
+import { parseBudgetSettingsCommand, type BudgetCommandResult } from "./budget-settings.service";
+import { parsePlannedTransaction, type PlannedTransaction } from "./planned-transaction.service";
+import { normalizeFreeText } from "./transaction-helpers";
 
 function countNumericAmountLikeTokens(message: string): number {
   const normalized = message.toLowerCase();
@@ -30,8 +28,7 @@ function countNumericAmountLikeTokens(message: string): number {
 }
 
 function requestsCategoryBreakdown(message: string): boolean {
-  const text = normalize(message);
-
+  const text = normalizeFreeText(message);
   return (
     text.includes("por categoria") ||
     text.includes("por categorias") ||
@@ -42,169 +39,104 @@ function requestsCategoryBreakdown(message: string): boolean {
 }
 
 function requestsTransactionDetail(message: string): boolean {
-  const text = normalize(message);
-
+  const text = normalizeFreeText(message);
   return (
     text.includes("lancamento") ||
     text.includes("lancamentos") ||
-    text.includes("lançamento") ||
-    text.includes("lançamentos") ||
     text.includes("detalha") ||
     text.includes("detalhar") ||
     text.includes("abre os lancamentos") ||
-    text.includes("abre os lançamentos") ||
     text.includes("abre por lancamento") ||
-    text.includes("abre por lançamento") ||
     text.includes("abre pro lancamento") ||
-    text.includes("abre pro lançamento") ||
     (text.includes("abre") && text.includes("lanc"))
   );
 }
 
 function resolveRequestedDetailLevel(message: string): QueryDetailLevel {
-  if (requestsTransactionDetail(message)) {
-    return "transaction";
-  }
-
-  if (requestsCategoryBreakdown(message)) {
-    return "category";
-  }
-
+  if (requestsTransactionDetail(message)) return "transaction";
+  if (requestsCategoryBreakdown(message)) return "category";
   return "summary";
 }
 
-function hasExpenseVerb(text: string): boolean {
-  return (
-    /\bgastei\b/.test(text) ||
-    /\bgaste\b/.test(text) ||
-    /\bgastou\b/.test(text) ||
-    /\bgasto\b/.test(text) ||
-    /\bgastos\b/.test(text)
-  );
-}
+function detectActualQueryType(message: string): ActualQueryType | null {
+  const text = normalizeFreeText(message);
 
-function hasIncomeVerb(text: string): boolean {
-  return (
-    /\brecebi\b/.test(text) ||
-    /\bentrou\b/.test(text) ||
-    /\bcaiu\b/.test(text) ||
-    /\bganhei\b/.test(text) ||
-    /\bfaturei\b/.test(text) ||
-    /\bfaturou\b/.test(text)
-  );
-}
+  if (text.includes("quanto posso gastar hoje") || text.includes("meu limite diario") || text.includes("limite diario de hoje")) {
+    return "daily_limit";
+  }
 
-function hasBalanceVerb(text: string): boolean {
-  return (
-    /\bsaldo\b/.test(text) ||
-    /\bsobrou\b/.test(text) ||
-    /\brestou\b/.test(text) ||
-    /\bresultado\b/.test(text)
-  );
-}
-
-function hasTotalLanguage(text: string): boolean {
-  return (
-    /\bquanto\b/.test(text) ||
-    /\bqnt\b/.test(text) ||
-    /\bqnto\b/.test(text) ||
-    /\btotal\b/.test(text) ||
-    /\bsoma\b/.test(text) ||
-    /\bdeu quanto\b/.test(text) ||
-    /\bquanto foi\b/.test(text) ||
-    /\bquanto saiu\b/.test(text) ||
-    /\bqual foi\b/.test(text) ||
-    /\bme mostra\b/.test(text) ||
-    /\bmostrar\b/.test(text)
-  );
-}
-
-function hasPeriodLanguage(text: string): boolean {
-  return (
-    /\bhoje\b/.test(text) ||
-    /\bhj\b/.test(text) ||
-    /\bontem\b/.test(text) ||
-    /\bsemana\b/.test(text) ||
-    /\bmes\b/.test(text) ||
-    /\bm[eê]s\b/.test(text) ||
-    /\bpassad[ao]\b/.test(text) ||
-    /\banterior\b/.test(text) ||
-    /\batual\b/.test(text) ||
-    /\b\d{1,2}\/\d{1,2}(?:\/(?:19\d{2}|20\d{2}))?\b/.test(text) ||
-    /\b\d{1,2}\s+de\s+[a-zç]+\b/.test(text)
-  );
-}
-
-function detectQueryType(message: string): QueryType | null {
-  const text = normalize(message);
-
-  if (
-    hasBalanceVerb(text) ||
-    text.includes("quanto sobrou") ||
-    text.includes("qual meu saldo") ||
-    text.includes("quanto restou")
-  ) {
+  if (text.includes("quanto sobrou") || text.includes("qual meu saldo") || text.includes("quanto restou") || text.includes("saldo do mes") || text.includes("saldo do mês")) {
     return "balance";
   }
 
-  if (
-    text.includes("quanto recebi") ||
-    text.includes("quanto entrou") ||
-    text.includes("quanto caiu") ||
-    text.includes("quanto ganhei") ||
-    text.includes("entradas")
-  ) {
+  if (text.includes("quanto recebi") || text.includes("quanto entrou") || text.includes("quanto caiu") || text.includes("quanto ganhei") || text.includes("entradas")) {
     return "income";
   }
 
-  if (
-    text.includes("quanto gastei") ||
-    text.includes("quanto saiu") ||
-    text.includes("meus gastos") ||
-    text.includes("saidas") ||
-    text.includes("saídas")
-  ) {
+  if (text.includes("quanto gastei") || text.includes("quanto saiu") || text.includes("meus gastos") || text.includes("saidas") || text.includes("saídas")) {
     return "expense";
   }
 
   return null;
 }
 
-function hasFinanceInquiryIntent(message: string): boolean {
-  const text = normalize(message);
+function detectForecastQueryType(message: string): ForecastQueryType | null {
+  const text = normalizeFreeText(message);
 
-  if (
-    /\brelatorio\b/.test(text) ||
-    /\brelatorios\b/.test(text) ||
-    /relatório/.test(message.toLowerCase()) ||
-    /relatórios/.test(message.toLowerCase())
-  ) {
-    return false;
+  if (text.includes("saldo projetado") || text.includes("saldo futuro") || text.includes("quanto vou ter") || text.includes("quanto terei")) {
+    return "projected_balance";
   }
 
-  return (
-    detectQueryType(text) !== null ||
-    (hasTotalLanguage(text) && hasPeriodLanguage(text))
-  );
+  if (text.includes("tenho a receber") || text.includes("vou receber") || text.includes("quanto entra") || text.includes("quanto vou receber")) {
+    return "receivable";
+  }
+
+  if (text.includes("tenho a pagar") || text.includes("vou pagar") || text.includes("quanto vence") || text.includes("quanto vou pagar")) {
+    return "payable";
+  }
+
+  return null;
+}
+
+function hasFinanceInquiryIntent(message: string): boolean {
+  const text = normalizeFreeText(message);
+  if (text.includes("relatorio") || text.includes("relatorios")) return false;
+  return detectActualQueryType(message) !== null || detectForecastQueryType(message) !== null;
 }
 
 function isContextualFollowUp(message: string): boolean {
-  const text = normalize(message);
-
+  const text = normalizeFreeText(message);
   return (
     requestsCategoryBreakdown(text) ||
     requestsTransactionDetail(text) ||
     text.includes("detalha isso") ||
     text.includes("abre isso") ||
-    text.includes("separa isso")
+    text.includes("separa isso") ||
+    text.startsWith("e ")
   );
 }
 
 export type InboundResolution =
   | { kind: "report_settings"; result: Extract<ReportCommandResult, { handled: true }> }
+  | { kind: "daily_limit_settings"; result: Extract<BudgetCommandResult, { handled: true }> }
+  | { kind: "daily_limit_query" }
+  | {
+      kind: "planned_transaction";
+      transaction: PlannedTransaction;
+    }
+  | {
+      kind: "planned_transaction_missing_amount";
+      reply: string;
+    }
+  | {
+      kind: "forecast_query";
+      queryType: Extract<QueryType, "payable" | "receivable" | "projected_balance">;
+      period: ResolvedPeriod;
+      detailLevel: QueryDetailLevel;
+    }
   | {
       kind: "spending_query";
-      queryType: QueryType;
+      queryType: Extract<QueryType, "expense" | "income" | "balance">;
       period: ResolvedPeriod;
       byCategory: boolean;
       detailLevel: QueryDetailLevel;
@@ -213,108 +145,110 @@ export type InboundResolution =
   | { kind: "multi_expense_warning" }
   | { kind: "generic" };
 
-export async function resolveInboundMessage(
-  userId: string,
-  message: string
-): Promise<InboundResolution> {
+export async function resolveInboundMessage(userId: string, message: string): Promise<InboundResolution> {
   const trimmed = message.trim();
-  const normalized = normalize(trimmed);
+  const normalized = normalizeFreeText(trimmed);
 
   const reportCmd = parseReportSettingsCommand(trimmed);
   if (reportCmd.handled) {
     return { kind: "report_settings", result: reportCmd };
   }
 
-  const parsedExpense = parseExpense(trimmed);
+  const budgetCmd = parseBudgetSettingsCommand(trimmed);
+  if (budgetCmd.handled) {
+    return { kind: "daily_limit_settings", result: budgetCmd };
+  }
 
+  if (detectActualQueryType(trimmed) === "daily_limit") {
+    return { kind: "daily_limit_query" };
+  }
+
+  const planned = parsePlannedTransaction(trimmed);
+  if (planned.kind === "missing_amount") {
+    return { kind: "planned_transaction_missing_amount", reply: planned.reply };
+  }
+  if (planned.kind === "parsed") {
+    return { kind: "planned_transaction", transaction: planned.transaction };
+  }
+
+  const parsedExpense = parseExpense(trimmed);
   if (countNumericAmountLikeTokens(trimmed) > 1 && !parsedExpense) {
     return { kind: "multi_expense_warning" };
   }
 
-  // Se conseguiu parsear uma transação, prioridade total: registrar.
   if (parsedExpense) {
     return { kind: "expense", parsed: parsedExpense };
   }
 
-  const explicitPeriod = resolvePeriodFromMessage(trimmed);
+  const explicitPeriod = resolvePeriodFromMessage(trimmed) ?? defaultMonthPeriod();
   const requestedDetailLevel = resolveRequestedDetailLevel(trimmed);
-  const queryType = detectQueryType(trimmed);
+  const actualQueryType = detectActualQueryType(trimmed);
+  const forecastQueryType = detectForecastQueryType(trimmed);
 
-  if (
-    explicitPeriod &&
-    (queryType !== null || hasTotalLanguage(normalized))
-  ) {
+  if (actualQueryType && actualQueryType !== "daily_limit") {
     return {
       kind: "spending_query",
-      queryType: queryType ?? "expense",
+      queryType: actualQueryType,
       period: explicitPeriod,
       byCategory: requestedDetailLevel !== "summary",
       detailLevel: requestedDetailLevel
     };
   }
 
-  if (hasFinanceInquiryIntent(trimmed)) {
+  if (forecastQueryType) {
     return {
-      kind: "spending_query",
-      queryType: queryType ?? "expense",
-      period: explicitPeriod ?? defaultMonthPeriod(),
-      byCategory: requestedDetailLevel !== "summary",
+      kind: "forecast_query",
+      queryType: forecastQueryType,
+      period: explicitPeriod,
       detailLevel: requestedDetailLevel
     };
   }
 
-  if (explicitPeriod) {
-    const context = await getQueryContext(userId);
-
-    if (
-      context &&
-      context.kind === "spending_period" &&
-      (normalized.startsWith("e ") || normalized.startsWith("e,") || hasPeriodLanguage(normalized))
-    ) {
-      return {
-        kind: "spending_query",
-        queryType: context.query_type,
-        period: explicitPeriod,
-        byCategory: context.by_category,
-        detailLevel: context.detail_level
-      };
-    }
-  }
-
   if (isContextualFollowUp(trimmed)) {
     const context = await getQueryContext(userId);
+    if (context) {
+      const nextDetailLevel = requestedDetailLevel === "summary" ? context.detail_level : requestedDetailLevel;
+      const nextByCategory = nextDetailLevel !== "summary";
 
-    if (
-      context &&
-      context.kind === "spending_period" &&
-      context.period_start_utc &&
-      context.period_end_utc &&
-      context.period_label
-    ) {
-      const nextDetailLevel =
-        requestedDetailLevel === "summary"
-          ? context.detail_level
-          : requestedDetailLevel;
+      if (context.query_type === "payable" || context.query_type === "receivable" || context.query_type === "projected_balance") {
+        return {
+          kind: "forecast_query",
+          queryType: context.query_type,
+          period: {
+            rangeStartUtc: context.period_start_utc ?? explicitPeriod.rangeStartUtc,
+            rangeEndUtc: context.period_end_utc ?? explicitPeriod.rangeEndUtc,
+            label: context.period_label ?? explicitPeriod.label
+          },
+          detailLevel: nextDetailLevel
+        };
+      }
 
-      const nextByCategory =
-        nextDetailLevel === "summary"
-          ? false
-          : requestsCategoryBreakdown(trimmed) ||
-            context.by_category ||
-            nextDetailLevel === "transaction";
+      if (context.query_type === "daily_limit") {
+        return { kind: "daily_limit_query" };
+      }
 
       return {
         kind: "spending_query",
-        queryType: context.query_type,
+        queryType: context.query_type as Extract<QueryType, "expense" | "income" | "balance">,
         period: {
-          rangeStartUtc: context.period_start_utc,
-          rangeEndUtc: context.period_end_utc,
-          label: context.period_label
+          rangeStartUtc: context.period_start_utc ?? explicitPeriod.rangeStartUtc,
+          rangeEndUtc: context.period_end_utc ?? explicitPeriod.rangeEndUtc,
+          label: context.period_label ?? explicitPeriod.label
         },
         byCategory: nextByCategory,
         detailLevel: nextDetailLevel
       };
     }
+  }
+
+  if (hasFinanceInquiryIntent(trimmed)) {
+    return {
+      kind: "spending_query",
+      queryType: "expense",
+      period: explicitPeriod,
+      byCategory: requestedDetailLevel !== "summary",
+      detailLevel: requestedDetailLevel
+    };
   }
 
   return { kind: "generic" };

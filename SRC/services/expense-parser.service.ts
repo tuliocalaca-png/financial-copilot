@@ -1,97 +1,67 @@
 import type { ParsedExpense } from "../core/types";
 import {
   inferExpenseCategoryFromText,
-  inferIncomeCategoryFromText
+  inferIncomeCategoryFromText,
+  normalizeFreeText,
+  parseLooseAmount
 } from "./transaction-helpers";
 
-function normalize(text: string): string {
-  return text.toLowerCase().trim();
-}
-
 function hasExpenseVerb(text: string): boolean {
-  return (
-    text.includes("gastei") ||
-    text.includes("gasto") ||
-    text.includes("paguei") ||
-    text.includes("pagar") ||
-    text.includes("custou") ||
-    text.includes("comprei")
+  return ["gastei", "gasto", "paguei", "pagar", "custou", "comprei", "saidas", "saidas"].some((token) =>
+    text.includes(token)
   );
 }
 
 function hasIncomeVerb(text: string): boolean {
-  return (
-    text.includes("recebi") ||
-    text.includes("receber") ||
-    text.includes("ganhei") ||
-    text.includes("ganho") ||
-    text.includes("entrou") ||
-    text.includes("caiu") ||
-    text.includes("salario") ||
-    text.includes("salário") ||
-    text.includes("pix")
+  return ["recebi", "receber", "ganhei", "ganho", "entrou", "caiu", "faturei", "faturou"].some((token) =>
+    text.includes(token)
   );
 }
 
 function isClearlyNotTransaction(text: string): boolean {
-  return (
-    text.includes("relatorio") ||
-    text.includes("relatório") ||
-    text.includes("lembrete") ||
-    text.includes("agenda") ||
-    text.includes("configurar") ||
-    text.includes("todo dia") ||
-    text.includes("às")
-  );
+  return [
+    "relatorio",
+    "lembrete",
+    "agenda",
+    "configurar",
+    "todo dia"
+  ].some((token) => text.includes(token));
 }
 
 function extractAmount(message: string): number | null {
-  const match = message.match(/\d+([.,]\d+)?/);
+  const match = normalizeFreeText(message).match(/r?\$?\s*\d+[\d.,]*k?/);
   if (!match) return null;
-
-  const value = Number(match[0].replace(",", "."));
-  if (!Number.isFinite(value) || value <= 0) return null;
-
-  return Math.round(value * 100) / 100;
+  return parseLooseAmount(match[0]);
 }
 
 function extractDescription(message: string): string {
-  const withoutNumber = message.replace(/\d+([.,]\d+)?/, "").trim();
+  const withoutNumber = message.replace(/r?\$?\s*\d+[\d.,]*k?/i, " ").trim();
   return withoutNumber.length > 0 ? withoutNumber : "movimento";
 }
 
 function looksLikeShortTransaction(text: string): boolean {
-  const words = text.split(" ");
-  return words.length <= 3 && /\d/.test(text);
+  const words = text.split(" ").filter(Boolean);
+  return words.length <= 4 && /\d/.test(text);
 }
 
 function looksLikeShortIncome(text: string): boolean {
-  return (
-    looksLikeShortTransaction(text) &&
-    (text.includes("salario") ||
-      text.includes("salário") ||
-      text.includes("pix") ||
-      text.includes("reembolso"))
-  );
+  return looksLikeShortTransaction(text) && ["salario", "pix", "reembolso", "entrou", "caiu"].some((token) => text.includes(token));
 }
 
 export function parseExpense(message: string): ParsedExpense | null {
-  const text = normalize(message);
+  const text = normalizeFreeText(message);
 
-  if (isClearlyNotTransaction(text)) {
+  if (!text || isClearlyNotTransaction(text)) {
     return null;
   }
 
-  const amount = extractAmount(text);
+  const amount = extractAmount(message);
   if (amount == null) {
     return null;
   }
 
-  const isIncome =
-    hasIncomeVerb(text) || looksLikeShortIncome(text);
-
-  const isExpense =
-    hasExpenseVerb(text) || looksLikeShortTransaction(text);
+  const isIncome = hasIncomeVerb(text) || looksLikeShortIncome(text);
+  const isExpense = hasExpenseVerb(text) || looksLikeShortTransaction(text);
 
   if (!isIncome && !isExpense) {
     return null;
