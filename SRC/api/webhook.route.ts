@@ -34,11 +34,21 @@ export async function webhookRoutes(app: FastifyInstance) {
     if (resolution.kind === "spending_query") {
       const period: any = resolution.period;
 
-      const data = await fetchFinanceAggregate(
-        phone,
-        period.startUtc ?? period.start ?? period.from,
-        period.endUtc ?? period.end ?? period.to
-      );
+      const start = period.startUtc ?? period.start ?? period.from;
+      const end = period.endUtc ?? period.end ?? period.to;
+      
+      if (!start || !end) {
+        console.error("❌ Period inválido:", period);
+      
+        await sendWhatsappMessage(
+          phone,
+          "Não consegui entender o período 😕"
+        );
+      
+        return reply.send({ ok: true });
+      }
+      
+      const data = await fetchFinanceAggregate(phone, start, end);
 
       const text = formatSpendingResponse({
         periodLabel: period.label,
