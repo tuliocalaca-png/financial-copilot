@@ -19,14 +19,46 @@ function stripAccents(text: string): string {
   return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
-function normalize(text: string): string {
+export function normalizeFreeText(text: string): string {
   return stripAccents(text.toLowerCase()).replace(/\s+/g, " ").trim();
+}
+
+export function parseLooseAmount(raw: string): number | null {
+  const input = raw.trim();
+
+  if (!input) {
+    return null;
+  }
+
+  const compact = input.replace(/\s+/g, "");
+
+  const kMatch = compact.match(/^(\d+(?:[.,]\d+)?)k$/i);
+  if (kMatch) {
+    const base = Number(kMatch[1].replace(",", "."));
+    if (!Number.isFinite(base) || base <= 0) {
+      return null;
+    }
+    return Math.round(base * 1000 * 100) / 100;
+  }
+
+  const sanitized = compact
+    .replace(/^r\$/i, "")
+    .replace(/\.(?=\d{3}(\D|$))/g, "")
+    .replace(",", ".");
+
+  const value = Number(sanitized);
+
+  if (!Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+
+  return Math.round(value * 100) / 100;
 }
 
 export function normalizeCategoryKey(
   input: string | null | undefined
 ): TransactionCategory {
-  const key = normalize(input ?? "");
+  const key = normalizeFreeText(input ?? "");
 
   switch (key) {
     case "alimentacao":
@@ -121,7 +153,7 @@ export function naturalCategoryLabel(
 }
 
 export function inferExpenseCategoryFromText(text: string): ExpenseCategory {
-  const t = normalize(text);
+  const t = normalizeFreeText(text);
 
   const alimentacaoKeywords = [
     "ifood",
@@ -136,6 +168,9 @@ export function inferExpenseCategoryFromText(text: string): ExpenseCategory {
     "cafe",
     "café",
     "padaria",
+    "mcdonald",
+    "mcdonald",
+    "burger king",
     "sorvete"
   ];
 
@@ -197,23 +232,23 @@ export function inferExpenseCategoryFromText(text: string): ExpenseCategory {
     "parque"
   ];
 
-  if (alimentacaoKeywords.some((k) => t.includes(normalize(k)))) {
+  if (alimentacaoKeywords.some((k) => t.includes(normalizeFreeText(k)))) {
     return "alimentacao";
   }
 
-  if (transporteKeywords.some((k) => t.includes(normalize(k)))) {
+  if (transporteKeywords.some((k) => t.includes(normalizeFreeText(k)))) {
     return "transporte";
   }
 
-  if (mercadoKeywords.some((k) => t.includes(normalize(k)))) {
+  if (mercadoKeywords.some((k) => t.includes(normalizeFreeText(k)))) {
     return "mercado";
   }
 
-  if (saudeKeywords.some((k) => t.includes(normalize(k)))) {
+  if (saudeKeywords.some((k) => t.includes(normalizeFreeText(k)))) {
     return "saude";
   }
 
-  if (lazerKeywords.some((k) => t.includes(normalize(k)))) {
+  if (lazerKeywords.some((k) => t.includes(normalizeFreeText(k)))) {
     return "lazer";
   }
 
@@ -221,7 +256,7 @@ export function inferExpenseCategoryFromText(text: string): ExpenseCategory {
 }
 
 export function inferIncomeCategoryFromText(text: string): IncomeCategory {
-  const t = normalize(text);
+  const t = normalizeFreeText(text);
 
   if (
     t.includes("salario") ||
