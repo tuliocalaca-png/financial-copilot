@@ -4,6 +4,7 @@ import { sendWhatsappMessage } from "../integrations/whatsapp.client";
 import { formatSpendingResponse } from "../services/openai.service";
 import { fetchFinanceAggregate } from "../services/spending-query.service";
 import { getOrCreateUser } from "../services/user.service";
+import { createTransaction } from "../services/transaction.service";
 
 export async function webhookRoutes(app: FastifyInstance) {
   app.post("/webhook/whatsapp", async (req, reply) => {
@@ -18,19 +19,39 @@ export async function webhookRoutes(app: FastifyInstance) {
     const phone = message.from;
     const text = message.text?.body ?? "";
 
-    // 🔥 resolve usuário (ESSENCIAL)
+    // 🔥 resolve usuário
     const user = await getOrCreateUser(phone);
     const userId = user.id;
 
     const resolution = await resolveInboundMessage(phone, text);
 
     // =========================
-    // 💰 TRANSAÇÃO
+    // 💰 TRANSAÇÃO (AGORA SALVA)
     // =========================
     if (resolution.kind === "expense") {
-      // ⚠️ IMPORTANTE: aqui você deveria salvar com userId
-      // (vou deixar simples por enquanto)
-      await sendWhatsappMessage(phone, "Anotado 👍");
+      try {
+        const parsed = resolution.parsed;
+
+        await createTransaction({
+          userId,
+          amount: parsed.amount,
+          description: parsed.description ?? "Gasto",
+          type: "expense"
+        });
+
+        await sendWhatsappMessage(
+          phone,
+          `Anotado 👍\nR$ ${parsed.amount.toFixed(2)}`
+        );
+      } catch (err) {
+        console.error("Erro ao salvar gasto:", err);
+
+        await sendWhatsappMessage(
+          phone,
+          "Erro ao registrar gasto 😕"
+        );
+      }
+
       return reply.send({ ok: true });
     }
 
@@ -43,7 +64,7 @@ export async function webhookRoutes(app: FastifyInstance) {
       let start = period?.startUtc ?? period?.start ?? period?.from;
       let end = period?.endUtc ?? period?.end ?? period?.to;
 
-      // 🔥 FALLBACK GARANTIDO
+      // 🔥 fallback garantido
       if (!start || !end) {
         console.warn("⚠️ Usando fallback de período (hoje)");
 
