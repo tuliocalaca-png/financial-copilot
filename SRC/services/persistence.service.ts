@@ -1,42 +1,52 @@
 import { supabase } from "../db/supabase";
-import { ParsedExpense } from "../core/types";
+import type { Intent, ParsedExpense } from "../core/types";
+
+type UserRow = {
+  id: string;
+  phone_number: string;
+};
 
 export async function getOrCreateUserByPhone(phoneNumber: string): Promise<string> {
-  const { data: existing, error: findError } = await supabase
+  const normalizedPhone = phoneNumber.trim();
+
+  const { data: existingUser, error: findError } = await supabase
     .from("users")
-    .select("id")
-    .eq("phone_number", phoneNumber)
-    .maybeSingle();
+    .select("id, phone_number")
+    .eq("phone_number", normalizedPhone)
+    .maybeSingle<UserRow>();
 
   if (findError) {
-    throw new Error(`Failed to fetch user: ${findError.message}`);
+    throw new Error(`Failed to find user by phone: ${findError.message}`);
   }
 
-  if (existing?.id) {
-    return existing.id;
+  if (existingUser?.id) {
+    return existingUser.id;
   }
 
-  const { data: inserted, error: insertError } = await supabase
+  const { data: createdUser, error: createError } = await supabase
     .from("users")
     .insert({
-      phone_number: phoneNumber
+      phone_number: normalizedPhone
     })
-    .select("id")
-    .single();
+    .select("id, phone_number")
+    .single<UserRow>();
 
-  if (insertError || !inserted?.id) {
-    throw new Error(`Failed to create user: ${insertError?.message ?? "unknown error"}`);
+  if (createError || !createdUser?.id) {
+    throw new Error(`Failed to create user: ${createError?.message ?? "unknown error"}`);
   }
 
-  return inserted.id;
+  return createdUser.id;
 }
 
-export async function saveExpense(userId: string, expense: ParsedExpense): Promise<void> {
+export async function saveExpense(userId: string, parsed: ParsedExpense): Promise<void> {
+  const transactionType = parsed.kind === "income" ? "income" : "expense";
+
   const { error } = await supabase.from("transactions").insert({
     user_id: userId,
-    amount: expense.amount,
-    category: expense.category,
-    description: expense.description
+    amount: parsed.amount,
+    description: parsed.description,
+    category: parsed.category,
+    type: transactionType
   });
 
   if (error) {
@@ -44,17 +54,17 @@ export async function saveExpense(userId: string, expense: ParsedExpense): Promi
   }
 }
 
-export async function saveMessageEvent(params: {
+export async function saveMessageEvent(input: {
   userId: string;
   direction: "inbound" | "outbound";
   messageText: string;
-  intent?: string;
+  intent: Intent | string;
 }): Promise<void> {
   const { error } = await supabase.from("message_events").insert({
-    user_id: params.userId,
-    direction: params.direction,
-    message_text: params.messageText,
-    intent: params.intent ?? null
+    user_id: input.userId,
+    direction: input.direction,
+    message_text: input.messageText,
+    intent: input.intent
   });
 
   if (error) {
