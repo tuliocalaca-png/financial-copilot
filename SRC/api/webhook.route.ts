@@ -23,7 +23,6 @@ export async function webhookRoutes(app: FastifyInstance) {
     // 💰 TRANSAÇÃO
     // =========================
     if (resolution.kind === "expense") {
-      // aqui você provavelmente já tem persistência em outro lugar
       await sendWhatsappMessage(phone, "Anotado 👍");
       return reply.send({ ok: true });
     }
@@ -32,30 +31,45 @@ export async function webhookRoutes(app: FastifyInstance) {
     // 📊 CONSULTA
     // =========================
     if (resolution.kind === "spending_query") {
-      const period: any = resolution.period;
+      let period = resolution.period as any;
 
-      const start = period.startUtc ?? period.start ?? period.from;
-      const end = period.endUtc ?? period.end ?? period.to;
-      
+      let start = period?.startUtc ?? period?.start ?? period?.from;
+      let end = period?.endUtc ?? period?.end ?? period?.to;
+
+      // 🔥 FALLBACK (resolve seu problema atual)
       if (!start || !end) {
-        console.error("❌ Period inválido:", period);
-      
-        await sendWhatsappMessage(
-          phone,
-          "Não consegui entender o período 😕"
-        );
-      
-        return reply.send({ ok: true });
+        console.warn("⚠️ Usando fallback de período (hoje)");
+
+        const now = new Date();
+
+        const startOfDay = new Date(now);
+        startOfDay.setHours(0, 0, 0, 0);
+
+        const endOfDay = new Date(now);
+        endOfDay.setHours(23, 59, 59, 999);
+
+        start = startOfDay.toISOString();
+        end = endOfDay.toISOString();
+
+        period = {
+          label: "hoje"
+        };
       }
-      
+
+      console.log("📊 Query:", {
+        start,
+        end,
+        label: period.label
+      });
+
       const data = await fetchFinanceAggregate(phone, start, end);
 
-      const text = formatSpendingResponse({
-        periodLabel: period.label,
+      const responseText = formatSpendingResponse({
+        periodLabel: period.label ?? "período",
         aggregate: data
       });
 
-      await sendWhatsappMessage(phone, text);
+      await sendWhatsappMessage(phone, responseText);
       return reply.send({ ok: true });
     }
 
@@ -70,7 +84,6 @@ export async function webhookRoutes(app: FastifyInstance) {
     // =========================
     // 🆕 NOVOS TIPOS (SAFE FALLBACK)
     // =========================
-
     if (
       resolution.kind === "daily_limit_query" ||
       resolution.kind === "daily_limit_settings" ||
