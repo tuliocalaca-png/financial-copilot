@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { buildServer } from "./api/server";
 import { config } from "./core/config";
 import { startReportScheduler } from "./services/report-scheduler.service";
