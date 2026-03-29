@@ -25,4 +25,5 @@ export interface DailyLimitResult {
   remainingDaysInMonth: number;
   dailyLimit: number;
   mode: "off" | "manual" | "auto";
+  isEnabled: boolean;
 }

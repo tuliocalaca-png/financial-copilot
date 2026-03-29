@@ -2,7 +2,14 @@ import { supabase } from "../db/supabase";
 
 export type QueryContextKind = "spending_period";
 export type QueryDetailLevel = "summary" | "category" | "transaction";
-export type QueryType = "expense" | "income" | "balance";
+export type QueryType =
+  | "expense"
+  | "income"
+  | "balance"
+  | "payable"
+  | "receivable"
+  | "projected_balance"
+  | "daily_limit";
 
 export type UserQueryContextRow = {
   user_id: string;
@@ -28,14 +35,25 @@ export type UpsertQueryContextInput = {
   source?: string;
 };
 
+function mapQueryType(value: unknown): QueryType {
+  switch (value) {
+    case "income":
+    case "balance":
+    case "payable":
+    case "receivable":
+    case "projected_balance":
+    case "daily_limit":
+      return value;
+    default:
+      return "expense";
+  }
+}
+
 function mapQueryContextRow(data: Record<string, unknown>): UserQueryContextRow {
   return {
     user_id: String(data.user_id),
-    kind: String(data.kind) as QueryContextKind,
-    query_type:
-      data.query_type === "income" || data.query_type === "balance"
-        ? (data.query_type as QueryType)
-        : "expense",
+    kind: "spending_period",
+    query_type: mapQueryType(data.query_type),
     period_start_utc:
       typeof data.period_start_utc === "string" ? data.period_start_utc : null,
     period_end_utc:
