@@ -1,280 +1,147 @@
 import { FastifyInstance } from "fastify";
-import { config } from "../core/config";
-import { sendWhatsappMessage } from "../integrations/whatsapp.client";
-import { generateAssistantReply } from "../services/openai.service";
-import {
-  resolveInboundMessage,
-  type InboundResolution
-} from "../services/inbound-resolution.service";
+import { resolveInboundMessage } from "../services/inbound-resolution.service";
+import { sendWhatsAppMessage } from "../integrations/whatsapp.client";
+import { formatSpendingResponse, formatDailyLimitResponse, formatForecastResponse } from "../services/openai.service";
 import { fetchFinanceAggregate } from "../services/spending-query.service";
-import { fetchFinanceTransactions } from "../services/transaction-details.service";
-import { upsertReportSettings } from "../services/report-settings.service";
-import { upsertQueryContext } from "../services/query-context.service";
-import {
-  getOrCreateUserByPhone,
-  saveExpense,
-  saveMessageEvent
-} from "../services/persistence.service";
+import { fetchTransactionDetails } from "../services/transaction-details.service";
+import { resolvePeriod } from "../services/period-resolver.service";
+import { handleBudgetCommand } from "../services/budget-settings.service";
+import { getDailyLimitStatus } from "../services/daily-limit.service";
+import { createPlannedTransaction, getPlannedTransactions } from "../services/planned-transaction.service";
 
-type IncomingMessage = {
-  phoneNumber: string;
-  messageText: string;
-};
+export async function webhookRoutes(app: FastifyInstance) {
+  app.post("/webhook", async (req, reply) => {
+    const body: any = req.body;
 
-type ExtractedWebhookPayload = {
-  incoming: IncomingMessage;
-  messageId?: string;
-};
+    const message = body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
-const processedMessageIds = new Map<string, number>();
-const PROCESSED_TTL_MS = 10 * 60 * 1000;
-
-function cleanupProcessedMessageIds(): void {
-  const now = Date.now();
-
-  for (const [messageId, timestamp] of processedMessageIds.entries()) {
-    if (now - timestamp > PROCESSED_TTL_MS) {
-      processedMessageIds.delete(messageId);
+    if (!message) {
+      return reply.send({ ok: true });
     }
-  }
-}
 
-function extractIncomingMessage(payload: unknown): ExtractedWebhookPayload | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
+    const phone = message.from;
+    const text = message.text?.body ?? "";
 
-  const body = payload as Record<string, unknown>;
+    const resolution = await resolveInboundMessage({
+      phoneNumber: phone,
+      messageText: text
+    });
 
-  const directMessage =
-    typeof body.messageText === "string"
-      ? body.messageText
-      : typeof body.message === "string"
-        ? body.message
-        : typeof body.text === "string"
-          ? body.text
+    // -------------------------
+    // 💰 TRANSAÇÕES (já existente)
+    // -------------------------
+    if (resolution.kind === "transaction") {
+      await sendWhatsAppMessage(phone, resolution.reply);
+      return reply.send({ ok: true });
+    }
+
+    // -------------------------
+    // 📊 CONSULTA DE GASTOS (já existente)
+    // -------------------------
+    if (resolution.kind === "spending_query") {
+      const data = await fetchFinanceAggregate(
+        phone,
+        resolution.period.startUtc,
+        resolution.period.endUtc
+      );
+
+      const details =
+        resolution.detailLevel === "transaction"
+          ? await fetchTransactionDetails(
+              phone,
+              resolution.period.startUtc,
+              resolution.period.endUtc
+            )
           : null;
 
-  const directPhone =
-    typeof body.phoneNumber === "string"
-      ? body.phoneNumber
-      : typeof body.phone === "string"
-        ? body.phone
-        : typeof body.from === "string"
-          ? body.from
-          : null;
+      const text = formatSpendingResponse({
+        periodLabel: resolution.period.label,
+        aggregate: data,
+        details,
+        byCategory: resolution.byCategory
+      });
 
-  const directMessageId =
-    typeof body.messageId === "string"
-      ? body.messageId
-      : typeof body.id === "string"
-        ? body.id
-        : undefined;
-
-  if (directMessage && directPhone) {
-    return {
-      incoming: {
-        messageText: directMessage,
-        phoneNumber: directPhone
-      },
-      messageId: directMessageId
-    };
-  }
-
-  const entry = Array.isArray(body.entry) ? body.entry[0] : null;
-  const changes =
-    entry && typeof entry === "object"
-      ? (entry as Record<string, unknown>).changes
-      : null;
-  const change = Array.isArray(changes) ? changes[0] : null;
-  const value =
-    change && typeof change === "object"
-      ? (change as Record<string, unknown>).value
-      : null;
-  const messages =
-    value && typeof value === "object"
-      ? (value as Record<string, unknown>).messages
-      : null;
-  const messageItem = Array.isArray(messages) ? messages[0] : null;
-
-  if (!messageItem || typeof messageItem !== "object") {
-    return null;
-  }
-
-  const messageRecord = messageItem as Record<string, unknown>;
-  const from = messageRecord.from;
-  const messageId =
-    typeof messageRecord.id === "string" ? messageRecord.id : undefined;
-
-  const textObj = messageRecord.text;
-  const textBody =
-    textObj && typeof textObj === "object"
-      ? (textObj as Record<string, unknown>).body
-      : null;
-
-  if (typeof from === "string" && typeof textBody === "string") {
-    return {
-      incoming: {
-        phoneNumber: from,
-        messageText: textBody
-      },
-      messageId
-    };
-  }
-
-  return null;
-}
-
-function intentLabelFromResolution(resolution: InboundResolution): string {
-  switch (resolution.kind) {
-    case "report_settings":
-      return "report_settings";
-    case "spending_query":
-      return "spending_query";
-    case "expense":
-      return "expense";
-    case "multi_expense_warning":
-      return "multi_expense_blocked";
-    default:
-      return "unknown";
-  }
-}
-
-export async function registerWhatsappWebhookRoute(
-  app: FastifyInstance
-): Promise<void> {
-  app.get("/webhook/whatsapp", async (request, reply) => {
-    const query = request.query as Record<string, string | undefined>;
-
-    const mode = query["hub.mode"];
-    const token = query["hub.verify_token"];
-    const challenge = query["hub.challenge"];
-
-    if (mode === "subscribe" && token === config.verifyToken) {
-      return reply.type("text/plain").send(challenge ?? "");
+      await sendWhatsAppMessage(phone, text);
+      return reply.send({ ok: true });
     }
 
-    return reply.status(403).send("Forbidden");
-  });
-
-  app.post("/webhook/whatsapp", async (request, reply) => {
-    try {
-      cleanupProcessedMessageIds();
-
-      const extracted = extractIncomingMessage(request.body);
-
-      if (!extracted) {
-        return reply.status(200).send({ ok: true, ignored: true });
-      }
-
-      const { incoming, messageId } = extracted;
-
-      if (messageId) {
-        if (processedMessageIds.has(messageId)) {
-          return reply.status(200).send({ ok: true, duplicate: true });
-        }
-
-        processedMessageIds.set(messageId, Date.now());
-      }
-
-      const userId = await getOrCreateUserByPhone(incoming.phoneNumber);
-      const resolution = await resolveInboundMessage(userId, incoming.messageText);
-      const intent = intentLabelFromResolution(resolution);
-
-      await saveMessageEvent({
-        userId,
-        direction: "inbound",
-        messageText: incoming.messageText,
-        intent
-      });
-
-      let responseText: string;
-
-      if (resolution.kind === "report_settings") {
-        if (Object.keys(resolution.result.patch).length > 0) {
-          await upsertReportSettings(userId, resolution.result.patch);
-        }
-
-        responseText = resolution.result.reply;
-      } else if (resolution.kind === "spending_query") {
-        const aggregate = await fetchFinanceAggregate(
-          userId,
-          resolution.period.rangeStartUtc,
-          resolution.period.rangeEndUtc
-        );
-
-        const transactions =
-          resolution.detailLevel === "transaction"
-            ? await fetchFinanceTransactions(
-                userId,
-                resolution.period.rangeStartUtc,
-                resolution.period.rangeEndUtc,
-                resolution.queryType
-              )
-            : [];
-
-        await upsertQueryContext(userId, {
-          kind: "spending_period",
-          queryType: resolution.queryType,
-          periodStartUtc: resolution.period.rangeStartUtc,
-          periodEndUtc: resolution.period.rangeEndUtc,
-          periodLabel: resolution.period.label,
-          byCategory: resolution.byCategory,
-          detailLevel: resolution.detailLevel,
-          source: "query"
-        });
-
-        responseText = await generateAssistantReply({
-          variant: "finance_query",
-          originalMessage: incoming.messageText,
-          facts: {
-            periodLabel: resolution.period.label,
-            queryType: resolution.queryType,
-            totalExpenses: aggregate.totalExpenses,
-            totalIncome: aggregate.totalIncome,
-            balance: aggregate.balance,
-            expenseTransactionCount: aggregate.expenseTransactionCount,
-            incomeTransactionCount: aggregate.incomeTransactionCount,
-            totalTransactionCount: aggregate.totalTransactionCount,
-            expenseByCategory: aggregate.expenseByCategory,
-            incomeByCategory: aggregate.incomeByCategory,
-            detailLevel: resolution.detailLevel,
-            byCategoryRequested: resolution.byCategory,
-            transactions
-          }
-        });
-      } else if (resolution.kind === "multi_expense_warning") {
-        responseText =
-          "Peguei que você mandou mais de um gasto 👀\n\nPra não errar, me manda um por vez 👍";
-      } else if (resolution.kind === "expense") {
-        await saveExpense(userId, resolution.parsed);
-
-        responseText = await generateAssistantReply({
-          variant: "transaction",
-          originalMessage: incoming.messageText,
-          parsedExpense: resolution.parsed
-        });
-      } else {
-        responseText =
-          "Posso te ajudar com gastos, entradas e saldo 👍\n\nExemplos:\n• gastei 20 no almoço\n• recebi 500 no pix\n• quanto gastei hoje";
-      }
-
-      await sendWhatsappMessage(incoming.phoneNumber, responseText);
-
-      await saveMessageEvent({
-        userId,
-        direction: "outbound",
-        messageText: responseText,
-        intent
-      });
-
-      return reply.status(200).send({ ok: true });
-    } catch (error) {
-      request.log.error(error);
-
-      return reply.status(500).send({
-        error: "Internal server error"
-      });
+    // -------------------------
+    // ⚙️ CONFIG (já existente)
+    // -------------------------
+    if (resolution.kind === "report_settings") {
+      await sendWhatsAppMessage(phone, resolution.reply);
+      return reply.send({ ok: true });
     }
+
+    // =========================
+    // 🆕 LIMITE DIÁRIO (SETTINGS)
+    // =========================
+    if (resolution.kind === "daily_limit_settings") {
+      await sendWhatsAppMessage(phone, resolution.result.reply);
+      return reply.send({ ok: true });
+    }
+
+    // =========================
+    // 🆕 LIMITE DIÁRIO (QUERY)
+    // =========================
+    if (resolution.kind === "daily_limit_query") {
+      const result = await getDailyLimitStatus(phone);
+
+      const text = formatDailyLimitResponse(result);
+
+      await sendWhatsAppMessage(phone, text);
+      return reply.send({ ok: true });
+    }
+
+    // =========================
+    // 🆕 LANÇAMENTO FUTURO
+    // =========================
+    if (resolution.kind === "planned_transaction") {
+      await createPlannedTransaction(phone, resolution.transaction);
+
+      await sendWhatsAppMessage(
+        phone,
+        `Anotei 📅 ${resolution.transaction.type === "income" ? "entrada" : "saída"} futura de R$ ${resolution.transaction.amount.toFixed(
+          2
+        )} para ${resolution.transaction.date}.`
+      );
+
+      return reply.send({ ok: true });
+    }
+
+    if (resolution.kind === "planned_transaction_missing_amount") {
+      await sendWhatsAppMessage(phone, resolution.reply);
+      return reply.send({ ok: true });
+    }
+
+    // =========================
+    // 🆕 FORECAST (receber/pagar/saldo)
+    // =========================
+    if (resolution.kind === "forecast_query") {
+      const planned = await getPlannedTransactions(
+        phone,
+        resolution.period.startUtc,
+        resolution.period.endUtc
+      );
+
+      const text = formatForecastResponse({
+        queryType: resolution.queryType,
+        planned,
+        periodLabel: resolution.period.label
+      });
+
+      await sendWhatsAppMessage(phone, text);
+      return reply.send({ ok: true });
+    }
+
+    // -------------------------
+    // 🤖 FALLBACK
+    // -------------------------
+    await sendWhatsAppMessage(
+      phone,
+      "Posso te ajudar com gastos, entradas e saldo 👍\n\nExemplos:\n• gastei 20 no almoço\n• recebi 500 no pix\n• quanto gastei hoje"
+    );
+
+    return reply.send({ ok: true });
   });
 }
