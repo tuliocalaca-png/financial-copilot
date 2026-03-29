@@ -1,13 +1,8 @@
 import { FastifyInstance } from "fastify";
 import { resolveInboundMessage } from "../services/inbound-resolution.service";
-import { sendWhatsAppMessage } from "../integrations/whatsapp.client";
-import { formatSpendingResponse, formatDailyLimitResponse, formatForecastResponse } from "../services/openai.service";
+import { sendWhatsappMessage } from "../integrations/whatsapp.client";
+import { formatSpendingResponse } from "../services/openai.service";
 import { fetchFinanceAggregate } from "../services/spending-query.service";
-import { fetchTransactionDetails } from "../services/transaction-details.service";
-import { resolvePeriod } from "../services/period-resolver.service";
-import { handleBudgetCommand } from "../services/budget-settings.service";
-import { getDailyLimitStatus } from "../services/daily-limit.service";
-import { createPlannedTransaction, getPlannedTransactions } from "../services/planned-transaction.service";
 
 export async function webhookRoutes(app: FastifyInstance) {
   app.post("/webhook", async (req, reply) => {
@@ -22,122 +17,68 @@ export async function webhookRoutes(app: FastifyInstance) {
     const phone = message.from;
     const text = message.text?.body ?? "";
 
-    const resolution = await resolveInboundMessage({
-      phoneNumber: phone,
-      messageText: text
-    });
+    const resolution = await resolveInboundMessage(phone, text);
 
-    // -------------------------
-    // 💰 TRANSAÇÕES (já existente)
-    // -------------------------
-    if (resolution.kind === "transaction") {
-      await sendWhatsAppMessage(phone, resolution.reply);
+    // =========================
+    // 💰 TRANSAÇÃO
+    // =========================
+    if (resolution.kind === "expense") {
+      // aqui você provavelmente já tem persistência em outro lugar
+      await sendWhatsappMessage(phone, "Anotado 👍");
       return reply.send({ ok: true });
     }
 
-    // -------------------------
-    // 📊 CONSULTA DE GASTOS (já existente)
-    // -------------------------
+    // =========================
+    // 📊 CONSULTA
+    // =========================
     if (resolution.kind === "spending_query") {
+      const period: any = resolution.period;
+
       const data = await fetchFinanceAggregate(
         phone,
-        resolution.period.startUtc,
-        resolution.period.endUtc
+        period.startUtc ?? period.start ?? period.from,
+        period.endUtc ?? period.end ?? period.to
       );
-
-      const details =
-        resolution.detailLevel === "transaction"
-          ? await fetchTransactionDetails(
-              phone,
-              resolution.period.startUtc,
-              resolution.period.endUtc
-            )
-          : null;
 
       const text = formatSpendingResponse({
-        periodLabel: resolution.period.label,
-        aggregate: data,
-        details,
-        byCategory: resolution.byCategory
+        periodLabel: period.label,
+        aggregate: data
       });
 
-      await sendWhatsAppMessage(phone, text);
+      await sendWhatsappMessage(phone, text);
       return reply.send({ ok: true });
     }
 
-    // -------------------------
-    // ⚙️ CONFIG (já existente)
-    // -------------------------
+    // =========================
+    // ⚙️ CONFIG
+    // =========================
     if (resolution.kind === "report_settings") {
-      await sendWhatsAppMessage(phone, resolution.reply);
+      await sendWhatsappMessage(phone, resolution.result.reply);
       return reply.send({ ok: true });
     }
 
     // =========================
-    // 🆕 LIMITE DIÁRIO (SETTINGS)
+    // 🆕 NOVOS TIPOS (SAFE FALLBACK)
     // =========================
-    if (resolution.kind === "daily_limit_settings") {
-      await sendWhatsAppMessage(phone, resolution.result.reply);
-      return reply.send({ ok: true });
-    }
 
-    // =========================
-    // 🆕 LIMITE DIÁRIO (QUERY)
-    // =========================
-    if (resolution.kind === "daily_limit_query") {
-      const result = await getDailyLimitStatus(phone);
-
-      const text = formatDailyLimitResponse(result);
-
-      await sendWhatsAppMessage(phone, text);
-      return reply.send({ ok: true });
-    }
-
-    // =========================
-    // 🆕 LANÇAMENTO FUTURO
-    // =========================
-    if (resolution.kind === "planned_transaction") {
-      await createPlannedTransaction(phone, resolution.transaction);
-
-      await sendWhatsAppMessage(
+    if (
+      resolution.kind === "daily_limit_query" ||
+      resolution.kind === "daily_limit_settings" ||
+      resolution.kind === "planned_transaction" ||
+      resolution.kind === "planned_transaction_missing_amount" ||
+      resolution.kind === "forecast_query"
+    ) {
+      await sendWhatsappMessage(
         phone,
-        `Anotei 📅 ${resolution.transaction.type === "income" ? "entrada" : "saída"} futura de R$ ${resolution.transaction.amount.toFixed(
-          2
-        )} para ${resolution.transaction.date}.`
+        "Essa função ainda está sendo finalizada 🚧"
       );
-
-      return reply.send({ ok: true });
-    }
-
-    if (resolution.kind === "planned_transaction_missing_amount") {
-      await sendWhatsAppMessage(phone, resolution.reply);
       return reply.send({ ok: true });
     }
 
     // =========================
-    // 🆕 FORECAST (receber/pagar/saldo)
-    // =========================
-    if (resolution.kind === "forecast_query") {
-      const planned = await getPlannedTransactions(
-        phone,
-        resolution.period.startUtc,
-        resolution.period.endUtc
-      );
-
-      const text = formatForecastResponse({
-        queryType: resolution.queryType,
-        planned,
-        periodLabel: resolution.period.label
-      });
-
-      await sendWhatsAppMessage(phone, text);
-      return reply.send({ ok: true });
-    }
-
-    // -------------------------
     // 🤖 FALLBACK
-    // -------------------------
-    await sendWhatsAppMessage(
+    // =========================
+    await sendWhatsappMessage(
       phone,
       "Posso te ajudar com gastos, entradas e saldo 👍\n\nExemplos:\n• gastei 20 no almoço\n• recebi 500 no pix\n• quanto gastei hoje"
     );

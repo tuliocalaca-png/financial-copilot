@@ -1,5 +1,5 @@
 import Fastify from "fastify";
-import { registerWhatsappWebhookRoute } from "./webhook.route";
+import { webhookRoutes } from "./webhook.route";
 import { registerCronRoutes } from "./cron.route";
 
 export async function buildServer() {
@@ -7,7 +7,7 @@ export async function buildServer() {
 
   app.get("/health", async () => ({ ok: true }));
 
-  await registerWhatsappWebhookRoute(app);
+  await webhookRoutes(app);
   await registerCronRoutes(app);
 
   return app;
