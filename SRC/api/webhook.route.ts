@@ -5,7 +5,7 @@ import { formatSpendingResponse } from "../services/openai.service";
 import { fetchFinanceAggregate } from "../services/spending-query.service";
 
 export async function webhookRoutes(app: FastifyInstance) {
-  app.post("/webhook", async (req, reply) => {
+  app.post("/webhook/whatsapp", async (req, reply) => {
     const body: any = req.body;
 
     const message = body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
