@@ -1,5 +1,7 @@
 import { supabase } from "../db/supabase";
 import {
+  isExpenseCategory,
+  isIncomeCategory,
   normalizeCategoryKey
 } from "./transaction-helpers";
 
@@ -7,6 +9,8 @@ export type CategoryTotal = {
   category: string;
   total: number;
 };
+
+export type FinanceQueryType = "expense" | "income" | "balance";
 
 export type FinanceAggregate = {
   totalExpenses: number;
@@ -19,6 +23,12 @@ export type FinanceAggregate = {
   incomeByCategory: CategoryTotal[];
 };
 
+export type SpendingAggregate = {
+  total: number;
+  transactionCount: number;
+  byCategory: CategoryTotal[];
+};
+
 type TxRow = {
   amount: string | number | null;
   category: string | null;
@@ -27,6 +37,15 @@ type TxRow = {
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function buildCategoryList(map: Map<string, number>): CategoryTotal[] {
+  return [...map.entries()]
+    .map(([category, total]) => ({
+      category,
+      total: round2(total)
+    }))
+    .sort((a, b) => b.total - a.total);
 }
 
 function aggregateRows(rows: TxRow[]): FinanceAggregate {
@@ -40,29 +59,27 @@ function aggregateRows(rows: TxRow[]): FinanceAggregate {
 
   for (const row of rows) {
     const amount = Number(row.amount ?? 0);
-    if (!Number.isFinite(amount) || amount <= 0) continue;
 
-    const category = normalizeCategoryKey(row.category);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      continue;
+    }
+
+    const categoryKey = normalizeCategoryKey(row.category);
     const type = row.type === "income" ? "income" : "expense";
 
-    if (type === "income") {
+    if (type === "income" || isIncomeCategory(categoryKey)) {
       totalIncome += amount;
       incomeCount += 1;
-      incomeMap.set(category, (incomeMap.get(category) ?? 0) + amount);
-    } else {
+      incomeMap.set(categoryKey, (incomeMap.get(categoryKey) ?? 0) + amount);
+      continue;
+    }
+
+    if (type === "expense" || isExpenseCategory(categoryKey)) {
       totalExpenses += amount;
       expenseCount += 1;
-      expenseMap.set(category, (expenseMap.get(category) ?? 0) + amount);
+      expenseMap.set(categoryKey, (expenseMap.get(categoryKey) ?? 0) + amount);
     }
   }
-
-  const mapToList = (map: Map<string, number>): CategoryTotal[] =>
-    [...map.entries()]
-      .map(([category, total]) => ({
-        category,
-        total: round2(total)
-      }))
-      .sort((a, b) => b.total - a.total);
 
   return {
     totalExpenses: round2(totalExpenses),
@@ -71,8 +88,8 @@ function aggregateRows(rows: TxRow[]): FinanceAggregate {
     expenseTransactionCount: expenseCount,
     incomeTransactionCount: incomeCount,
     totalTransactionCount: expenseCount + incomeCount,
-    expenseByCategory: mapToList(expenseMap),
-    incomeByCategory: mapToList(incomeMap)
+    expenseByCategory: buildCategoryList(expenseMap),
+    incomeByCategory: buildCategoryList(incomeMap)
   };
 }
 
@@ -93,4 +110,22 @@ export async function fetchFinanceAggregate(
   }
 
   return aggregateRows((data ?? []) as TxRow[]);
+}
+
+export async function fetchSpendingAggregate(
+  userId: string,
+  rangeStartUtc: string,
+  rangeEndUtcExclusive: string
+): Promise<SpendingAggregate> {
+  const aggregate = await fetchFinanceAggregate(
+    userId,
+    rangeStartUtc,
+    rangeEndUtcExclusive
+  );
+
+  return {
+    total: aggregate.totalExpenses,
+    transactionCount: aggregate.expenseTransactionCount,
+    byCategory: aggregate.expenseByCategory
+  };
 }
