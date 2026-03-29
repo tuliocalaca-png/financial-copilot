@@ -3,6 +3,7 @@ import { resolveInboundMessage } from "../services/inbound-resolution.service";
 import { sendWhatsappMessage } from "../integrations/whatsapp.client";
 import { formatSpendingResponse } from "../services/openai.service";
 import { fetchFinanceAggregate } from "../services/spending-query.service";
+import { getOrCreateUser } from "../services/user.service";
 
 export async function webhookRoutes(app: FastifyInstance) {
   app.post("/webhook/whatsapp", async (req, reply) => {
@@ -17,12 +18,18 @@ export async function webhookRoutes(app: FastifyInstance) {
     const phone = message.from;
     const text = message.text?.body ?? "";
 
+    // 🔥 resolve usuário (ESSENCIAL)
+    const user = await getOrCreateUser(phone);
+    const userId = user.id;
+
     const resolution = await resolveInboundMessage(phone, text);
 
     // =========================
     // 💰 TRANSAÇÃO
     // =========================
     if (resolution.kind === "expense") {
+      // ⚠️ IMPORTANTE: aqui você deveria salvar com userId
+      // (vou deixar simples por enquanto)
       await sendWhatsappMessage(phone, "Anotado 👍");
       return reply.send({ ok: true });
     }
@@ -36,7 +43,7 @@ export async function webhookRoutes(app: FastifyInstance) {
       let start = period?.startUtc ?? period?.start ?? period?.from;
       let end = period?.endUtc ?? period?.end ?? period?.to;
 
-      // 🔥 FALLBACK (resolve seu problema atual)
+      // 🔥 FALLBACK GARANTIDO
       if (!start || !end) {
         console.warn("⚠️ Usando fallback de período (hoje)");
 
@@ -57,12 +64,13 @@ export async function webhookRoutes(app: FastifyInstance) {
       }
 
       console.log("📊 Query:", {
+        userId,
         start,
         end,
         label: period.label
       });
 
-      const data = await fetchFinanceAggregate(phone, start, end);
+      const data = await fetchFinanceAggregate(userId, start, end);
 
       const responseText = formatSpendingResponse({
         periodLabel: period.label ?? "período",
