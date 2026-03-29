@@ -138,24 +138,31 @@ function hasPeriodLanguage(text: string): boolean {
 function detectQueryType(message: string): QueryType | null {
   const text = normalize(message);
 
-  if (hasBalanceVerb(text) || text.includes("quanto sobrou")) {
+  if (
+    hasBalanceVerb(text) ||
+    text.includes("quanto sobrou") ||
+    text.includes("qual meu saldo") ||
+    text.includes("quanto restou")
+  ) {
     return "balance";
   }
 
   if (
-    hasIncomeVerb(text) ||
     text.includes("quanto recebi") ||
     text.includes("quanto entrou") ||
-    text.includes("quanto caiu")
+    text.includes("quanto caiu") ||
+    text.includes("quanto ganhei") ||
+    text.includes("entradas")
   ) {
     return "income";
   }
 
   if (
-    hasExpenseVerb(text) ||
     text.includes("quanto gastei") ||
     text.includes("quanto saiu") ||
-    text.includes("meus gastos")
+    text.includes("meus gastos") ||
+    text.includes("saidas") ||
+    text.includes("saídas")
   ) {
     return "expense";
   }
@@ -224,13 +231,17 @@ export async function resolveInboundMessage(
     return { kind: "multi_expense_warning" };
   }
 
+  // Se conseguiu parsear uma transação, prioridade total: registrar.
+  if (parsedExpense) {
+    return { kind: "expense", parsed: parsedExpense };
+  }
+
   const explicitPeriod = resolvePeriodFromMessage(trimmed);
   const requestedDetailLevel = resolveRequestedDetailLevel(trimmed);
   const queryType = detectQueryType(trimmed);
 
   if (
     explicitPeriod &&
-    !parsedExpense &&
     (queryType !== null || hasTotalLanguage(normalized))
   ) {
     return {
@@ -252,7 +263,7 @@ export async function resolveInboundMessage(
     };
   }
 
-  if (explicitPeriod && !parsedExpense) {
+  if (explicitPeriod) {
     const context = await getQueryContext(userId);
 
     if (
@@ -304,10 +315,6 @@ export async function resolveInboundMessage(
         detailLevel: nextDetailLevel
       };
     }
-  }
-
-  if (parsedExpense) {
-    return { kind: "expense", parsed: parsedExpense };
   }
 
   return { kind: "generic" };
