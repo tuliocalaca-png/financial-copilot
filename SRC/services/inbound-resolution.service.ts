@@ -24,7 +24,7 @@ import {
   type PlannedTransaction,
   type SettleIntent
 } from "./planned-transaction.service";
-import { normalizeFreeText } from "./transaction-helpers";
+import { normalizeFreeText, parseLooseAmount } from "./transaction-helpers";
 
 function countNumericAmountLikeTokens(message: string): number {
   const normalized = message.toLowerCase();
@@ -160,6 +160,23 @@ export async function resolveInboundMessage(userId: string, message: string): Pr
     return { kind: "report_settings", result: reportCmd };
   }
 
+  // Se o bot estava aguardando o valor do orçamento, interpreta a resposta numérica como budget
+  const pendingCtx = await getQueryContext(userId);
+  if (pendingCtx?.query_type === "budget_amount_pending") {
+    const amount = parseLooseAmount(normalized);
+    if (amount != null && amount > 0) {
+      const formatted = amount.toFixed(2).replace(".", ",");
+      return {
+        kind: "daily_limit_settings",
+        result: {
+          handled: true,
+          reply: `Orçamento mensal definido: R$ ${formatted} ✅\n\nAgora você pode perguntar "quanto posso gastar hoje" a qualquer momento.`,
+          patch: { is_enabled: true, monthly_budget: amount }
+        }
+      };
+    }
+  }
+
   const budgetCmd = parseBudgetSettingsCommand(trimmed);
   if (budgetCmd.handled) {
     return { kind: "daily_limit_settings", result: budgetCmd };
@@ -216,7 +233,7 @@ export async function resolveInboundMessage(userId: string, message: string): Pr
   }
 
   if (isContextualFollowUp(trimmed)) {
-    const context = await getQueryContext(userId);
+    const context = pendingCtx ?? await getQueryContext(userId);
     if (context) {
       const nextDetailLevel = requestedDetailLevel === "summary" ? context.detail_level : requestedDetailLevel;
       const nextByCategory = nextDetailLevel !== "summary";

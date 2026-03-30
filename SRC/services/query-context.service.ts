@@ -9,7 +9,8 @@ export type QueryType =
   | "payable"
   | "receivable"
   | "projected_balance"
-  | "daily_limit";
+  | "daily_limit"
+  | "budget_amount_pending";
 
 export type UserQueryContextRow = {
   user_id: string;
@@ -43,6 +44,7 @@ function mapQueryType(value: unknown): QueryType {
     case "receivable":
     case "projected_balance":
     case "daily_limit":
+    case "budget_amount_pending":
       return value;
     default:
       return "expense";

@@ -13,6 +13,7 @@ import {
   saveMessageEvent
 } from "../services/persistence.service";
 import { upsertBudgetSettings } from "../services/budget-settings.service";
+import { upsertQueryContext } from "../services/query-context.service";
 import { calculateDailyLimit } from "../services/daily-limit.service";
 import {
   savePlannedTransaction,
@@ -192,6 +193,17 @@ export async function webhookRoutes(app: FastifyInstance) {
         try {
           if (Object.keys(resolution.result.patch).length > 0) {
             await upsertBudgetSettings(userId, resolution.result.patch);
+          } else {
+            // Patch vazio = bot está pedindo o valor do orçamento; salva contexto
+            // para que a próxima resposta numérica seja interpretada como budget
+            const now = new Date().toISOString();
+            await upsertQueryContext(userId, {
+              kind: "spending_period",
+              queryType: "budget_amount_pending",
+              periodStartUtc: now,
+              periodEndUtc: now,
+              periodLabel: "budget_pending"
+            });
           }
         } catch (err) {
           req.log.error(err);

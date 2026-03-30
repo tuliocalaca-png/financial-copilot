@@ -52,6 +52,17 @@ function mapRow(data: Record<string, unknown>): UserBudgetSettingsRow {
   };
 }
 
+/**
+ * Extrai o primeiro token numérico em formato pt-BR do texto e converte para number.
+ * Necessário porque parseLooseAmount espera uma string já isolada como número;
+ * passar o texto completo (ex.: "meu orcamento e 40.000,00") faz Number() retornar NaN.
+ */
+function extractAmountFromText(text: string): number | null {
+  const match = text.match(/(?:r\$\s*)?(\d[\d.]*(?:,\d{1,2})?k?)/i);
+  if (!match) return null;
+  return parseLooseAmount(match[1]);
+}
+
 export function parseBudgetSettingsCommand(message: string): BudgetCommandResult {
   const text = normalizeFreeText(message);
   if (!text) return { handled: false };
@@ -78,7 +89,7 @@ export function parseBudgetSettingsCommand(message: string): BudgetCommandResult
       };
     }
 
-    const amount = parseLooseAmount(text);
+    const amount = extractAmountFromText(text);
     if (amount != null && amount > 0) {
       const formatted = amount.toFixed(2).replace(".", ",");
       return {
@@ -122,7 +133,7 @@ export function parseBudgetSettingsCommand(message: string): BudgetCommandResult
   }
 
   if (text.includes("limite diario") || text.includes("limite diário")) {
-    const amount = parseLooseAmount(text);
+    const amount = extractAmountFromText(text);
     if (amount != null) {
       return {
         handled: true,
