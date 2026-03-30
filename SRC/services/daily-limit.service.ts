@@ -21,6 +21,7 @@ function round2(n: number): number {
 
 export async function calculateDailyLimit(userId: string): Promise<DailyLimitResult> {
   const settings = await getBudgetSettings(userId);
+  console.log("[daily-limit] getBudgetSettings result:", JSON.stringify({ userId, settings }));
   const { now, monthStart, monthEnd } = getMonthBounds();
 
   const todayStart = now.startOf("day");

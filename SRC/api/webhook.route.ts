@@ -192,7 +192,9 @@ export async function webhookRoutes(app: FastifyInstance) {
       if (resolution.kind === "daily_limit_settings") {
         try {
           if (Object.keys(resolution.result.patch).length > 0) {
+            req.log.info({ userId, patch: resolution.result.patch }, "budget_settings: saving");
             await upsertBudgetSettings(userId, resolution.result.patch);
+            req.log.info({ userId }, "budget_settings: saved ok");
           } else {
             // Patch vazio = bot está pedindo o valor do orçamento; salva contexto
             // para que a próxima resposta numérica seja interpretada como budget
@@ -205,17 +207,25 @@ export async function webhookRoutes(app: FastifyInstance) {
               periodLabel: "budget_pending"
             });
           }
-        } catch (err) {
-          req.log.error(err);
-        }
 
-        await sendWhatsappMessage(phone, resolution.result.reply);
-        await saveMessageEvent({
-          userId,
-          direction: "outbound",
-          messageText: resolution.result.reply,
-          intent: resolution.kind
-        });
+          await sendWhatsappMessage(phone, resolution.result.reply);
+          await saveMessageEvent({
+            userId,
+            direction: "outbound",
+            messageText: resolution.result.reply,
+            intent: resolution.kind
+          });
+        } catch (err) {
+          req.log.error({ err, userId, patch: resolution.result.patch }, "budget_settings: error");
+          const errorText = "Erro ao salvar orçamento 😕 Tente novamente.";
+          await sendWhatsappMessage(phone, errorText);
+          await saveMessageEvent({
+            userId,
+            direction: "outbound",
+            messageText: errorText,
+            intent: resolution.kind
+          });
+        }
         return reply.send({ ok: true });
       }
 
@@ -225,6 +235,7 @@ export async function webhookRoutes(app: FastifyInstance) {
       if (resolution.kind === "daily_limit_query") {
         try {
           const limitResult = await calculateDailyLimit(userId);
+          req.log.info({ userId, limitResult }, "daily_limit_query: result from calculateDailyLimit");
           const responseText = formatDailyLimitResponse(limitResult);
 
           await sendWhatsappMessage(phone, responseText);
