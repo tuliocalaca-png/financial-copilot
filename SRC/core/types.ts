@@ -21,9 +21,12 @@ export interface ParsedExpense {
 
 export interface DailyLimitResult {
   totalSpentMonth: number;
+  spentToday: number;
   remainingMonthBudget: number;
   remainingDaysInMonth: number;
   dailyLimit: number;
+  monthlyBudget: number;
   mode: "off" | "manual" | "auto";
   isEnabled: boolean;
+  noBudgetSet: boolean;
 }

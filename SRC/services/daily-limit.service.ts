@@ -2,7 +2,6 @@ import { DateTime } from "luxon";
 import { DailyLimitResult } from "../core/types";
 import { fetchFinanceAggregate } from "./spending-query.service";
 import { getBudgetSettings } from "./budget-settings.service";
-import { fetchPlannedForecastSummary } from "./planned-transaction.service";
 import { DEFAULT_TIMEZONE } from "./period-resolver.service";
 
 function getMonthBounds() {
@@ -16,55 +15,56 @@ function calculateRemainingDays(now: DateTime): number {
   return Math.max(now.endOf("month").day - now.day + 1, 1);
 }
 
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 export async function calculateDailyLimit(userId: string): Promise<DailyLimitResult> {
   const settings = await getBudgetSettings(userId);
   const { now, monthStart, monthEnd } = getMonthBounds();
 
-  const aggregate = await fetchFinanceAggregate(
-    userId,
-    monthStart.toUTC().toISO()!,
-    monthEnd.toUTC().toISO()!
-  );
+  const todayStart = now.startOf("day");
+  const todayEnd = todayStart.plus({ days: 1 });
 
-  const planned = await fetchPlannedForecastSummary(
-    userId,
-    now.toISODate()!,
-    monthEnd.minus({ days: 1 }).toISODate()!
-  );
+  const [monthAggregate, todayAggregate] = await Promise.all([
+    fetchFinanceAggregate(userId, monthStart.toUTC().toISO()!, monthEnd.toUTC().toISO()!),
+    fetchFinanceAggregate(userId, todayStart.toUTC().toISO()!, todayEnd.toUTC().toISO()!)
+  ]);
 
   const remainingDaysInMonth = calculateRemainingDays(now);
-  const baseRemaining = aggregate.balance + planned.projectedBalance;
+  const spentToday = todayAggregate.totalExpenses;
+  const totalSpentMonth = monthAggregate.totalExpenses;
 
-  if (!settings || !settings.is_daily_limit_enabled) {
+  // Sem orçamento configurado
+  if (!settings || !settings.is_enabled || settings.monthly_budget <= 0) {
     return {
-      totalSpentMonth: aggregate.totalExpenses,
-      remainingMonthBudget: baseRemaining,
+      totalSpentMonth,
+      spentToday,
+      remainingMonthBudget: 0,
       remainingDaysInMonth,
       dailyLimit: 0,
-      mode: settings?.daily_limit_mode ?? "auto",
-      isEnabled: false
+      monthlyBudget: 0,
+      mode: "off",
+      isEnabled: false,
+      noBudgetSet: true
     };
   }
 
-  if (settings.daily_limit_mode === "manual" && (settings.manual_daily_limit ?? 0) > 0) {
-    return {
-      totalSpentMonth: aggregate.totalExpenses,
-      remainingMonthBudget: baseRemaining,
-      remainingDaysInMonth,
-      dailyLimit: settings.manual_daily_limit ?? 0,
-      mode: "manual",
-      isEnabled: true
-    };
-  }
-
-  const dailyLimit = baseRemaining / remainingDaysInMonth;
+  // Fórmula: (orçamento - gasto no mês) / dias restantes
+  const remainingMonthBudget = Math.max(settings.monthly_budget - totalSpentMonth, 0);
+  const dailyLimit = remainingDaysInMonth > 0
+    ? round2(remainingMonthBudget / remainingDaysInMonth)
+    : 0;
 
   return {
-    totalSpentMonth: aggregate.totalExpenses,
-    remainingMonthBudget: baseRemaining,
+    totalSpentMonth: round2(totalSpentMonth),
+    spentToday: round2(spentToday),
+    remainingMonthBudget: round2(remainingMonthBudget),
     remainingDaysInMonth,
-    dailyLimit: Math.round(dailyLimit * 100) / 100,
-    mode: "auto",
-    isEnabled: true
+    dailyLimit,
+    monthlyBudget: settings.monthly_budget,
+    mode: "manual",
+    isEnabled: true,
+    noBudgetSet: false
   };
 }

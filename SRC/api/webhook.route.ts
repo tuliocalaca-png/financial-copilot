@@ -1,13 +1,34 @@
 import { FastifyInstance } from "fastify";
 import { resolveInboundMessage } from "../services/inbound-resolution.service";
 import { sendWhatsappMessage } from "../integrations/whatsapp.client";
-import { formatSpendingResponse } from "../services/openai.service";
+import {
+  formatSpendingResponse,
+  formatDailyLimitResponse,
+  formatForecastResponse
+} from "../services/openai.service";
 import { fetchFinanceAggregate } from "../services/spending-query.service";
 import {
   getOrCreateUserByPhone,
   saveExpense,
   saveMessageEvent
 } from "../services/persistence.service";
+import { upsertBudgetSettings } from "../services/budget-settings.service";
+import { calculateDailyLimit } from "../services/daily-limit.service";
+import {
+  savePlannedTransaction,
+  settlePlannedTransactionByKeyword,
+  fetchPlannedForecastSummary
+} from "../services/planned-transaction.service";
+
+function brl(value: number): string {
+  return `R$ ${value.toFixed(2).replace(".", ",")}`;
+}
+
+function dueDateLabel(isoDate: string): string {
+  const parts = isoDate.split("-");
+  if (parts.length < 3) return isoDate;
+  return `${parts[2]}/${parts[1]}`;
+}
 
 type WhatsAppWebhookBody = {
   entry?: Array<{
@@ -165,26 +186,187 @@ export async function webhookRoutes(app: FastifyInstance) {
       }
 
       // =========================
-      // 🆕 NOVOS TIPOS (fallback temporário)
+      // ⚙️ CONFIG DE ORÇAMENTO
       // =========================
-      if (
-        resolution.kind === "daily_limit_query" ||
-        resolution.kind === "daily_limit_settings" ||
-        resolution.kind === "planned_transaction" ||
-        resolution.kind === "planned_transaction_missing_amount" ||
-        resolution.kind === "forecast_query"
-      ) {
-        const responseText = "Essa função ainda está sendo finalizada 🚧";
+      if (resolution.kind === "daily_limit_settings") {
+        try {
+          if (Object.keys(resolution.result.patch).length > 0) {
+            await upsertBudgetSettings(userId, resolution.result.patch);
+          }
+        } catch (err) {
+          req.log.error(err);
+        }
 
-        await sendWhatsappMessage(phone, responseText);
-
+        await sendWhatsappMessage(phone, resolution.result.reply);
         await saveMessageEvent({
           userId,
           direction: "outbound",
-          messageText: responseText,
+          messageText: resolution.result.reply,
           intent: resolution.kind
         });
+        return reply.send({ ok: true });
+      }
 
+      // =========================
+      // 💰 LIMITE DIÁRIO
+      // =========================
+      if (resolution.kind === "daily_limit_query") {
+        try {
+          const limitResult = await calculateDailyLimit(userId);
+          const responseText = formatDailyLimitResponse(limitResult);
+
+          await sendWhatsappMessage(phone, responseText);
+          await saveMessageEvent({
+            userId,
+            direction: "outbound",
+            messageText: responseText,
+            intent: resolution.kind
+          });
+        } catch (err) {
+          req.log.error(err);
+          const errorText = "Não consegui calcular o limite agora 😕";
+          await sendWhatsappMessage(phone, errorText);
+          await saveMessageEvent({
+            userId,
+            direction: "outbound",
+            messageText: errorText,
+            intent: resolution.kind
+          });
+        }
+        return reply.send({ ok: true });
+      }
+
+      // =========================
+      // 📋 TRANSAÇÃO PLANEJADA — REGISTRO
+      // =========================
+      if (resolution.kind === "planned_transaction") {
+        try {
+          await savePlannedTransaction(userId, resolution.transaction);
+
+          const kindLabel = resolution.transaction.kind === "income" ? "a receber" : "a pagar";
+          const responseText =
+            `Anotado 👍\n${resolution.transaction.description} — ${brl(resolution.transaction.amount)} (${kindLabel}, vence ${dueDateLabel(resolution.transaction.dueDate)})`;
+
+          await sendWhatsappMessage(phone, responseText);
+          await saveMessageEvent({
+            userId,
+            direction: "outbound",
+            messageText: responseText,
+            intent: resolution.kind
+          });
+        } catch (err) {
+          req.log.error(err);
+          const errorText = "Erro ao registrar o compromisso 😕";
+          await sendWhatsappMessage(phone, errorText);
+          await saveMessageEvent({
+            userId,
+            direction: "outbound",
+            messageText: errorText,
+            intent: resolution.kind
+          });
+        }
+        return reply.send({ ok: true });
+      }
+
+      // =========================
+      // 📋 TRANSAÇÃO PLANEJADA — VALOR FALTANDO
+      // =========================
+      if (resolution.kind === "planned_transaction_missing_amount") {
+        await sendWhatsappMessage(phone, resolution.reply);
+        await saveMessageEvent({
+          userId,
+          direction: "outbound",
+          messageText: resolution.reply,
+          intent: resolution.kind
+        });
+        return reply.send({ ok: true });
+      }
+
+      // =========================
+      // ✅ BAIXA EM TRANSAÇÃO PLANEJADA
+      // =========================
+      if (resolution.kind === "planned_transaction_settle") {
+        try {
+          const { settled, description } = await settlePlannedTransactionByKeyword(
+            userId,
+            resolution.keyword,
+            resolution.txKind
+          );
+
+          const responseText = settled
+            ? `Marcado como ${resolution.txKind === "income" ? "recebido" : "pago"} ✅\n${description}`
+            : `Não encontrei nenhum compromisso pendente com "${resolution.keyword}" 🤔\n\nVerifique com "quanto tenho a pagar esse mês".`;
+
+          await sendWhatsappMessage(phone, responseText);
+          await saveMessageEvent({
+            userId,
+            direction: "outbound",
+            messageText: responseText,
+            intent: resolution.kind
+          });
+        } catch (err) {
+          req.log.error(err);
+          const errorText = "Erro ao dar baixa no compromisso 😕";
+          await sendWhatsappMessage(phone, errorText);
+          await saveMessageEvent({
+            userId,
+            direction: "outbound",
+            messageText: errorText,
+            intent: resolution.kind
+          });
+        }
+        return reply.send({ ok: true });
+      }
+
+      // =========================
+      // 🔮 FORECAST
+      // =========================
+      if (resolution.kind === "forecast_query") {
+        try {
+          const { rangeStartUtc, rangeEndUtc, label } = resolution.period;
+
+          // Para datas de planned_transactions usamos só a parte de data (YYYY-MM-DD)
+          const startDate = rangeStartUtc.split("T")[0];
+          const endDate = rangeEndUtc.split("T")[0];
+
+          const forecastSummary = await fetchPlannedForecastSummary(userId, startDate, endDate);
+
+          let realBalance: number | undefined;
+          if (resolution.queryType === "projected_balance") {
+            const realAggregate = await fetchFinanceAggregate(userId, rangeStartUtc, rangeEndUtc);
+            realBalance = realAggregate.balance;
+          }
+
+          const allPlanned = [
+            ...forecastSummary.receivables,
+            ...forecastSummary.payables
+          ];
+
+          const responseText = formatForecastResponse({
+            queryType: resolution.queryType,
+            planned: allPlanned,
+            periodLabel: label,
+            realBalance
+          });
+
+          await sendWhatsappMessage(phone, responseText);
+          await saveMessageEvent({
+            userId,
+            direction: "outbound",
+            messageText: responseText,
+            intent: resolution.kind
+          });
+        } catch (err) {
+          req.log.error(err);
+          const errorText = "Não consegui carregar a projeção agora 😕";
+          await sendWhatsappMessage(phone, errorText);
+          await saveMessageEvent({
+            userId,
+            direction: "outbound",
+            messageText: errorText,
+            intent: resolution.kind
+          });
+        }
         return reply.send({ ok: true });
       }
 

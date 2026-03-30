@@ -25,6 +25,11 @@ export type PlannedTransactionParseResult =
   | { kind: "missing_amount"; reply: string }
   | { kind: "no_match" };
 
+export type SettleIntent = {
+  keyword: string;
+  txKind: "income" | "expense";
+};
+
 export type PlannedForecastSummary = {
   totalReceivable: number;
   totalPayable: number;
@@ -169,6 +174,88 @@ export async function fetchPlannedTransactions(
     dueDate: String(row.due_date),
     status: row.status ?? "pending"
   }));
+}
+
+/**
+ * Detecta intenção de dar baixa em transação planejada.
+ * "paguei o aluguel" → { keyword: "aluguel", txKind: "expense" }
+ * "recebi o freelance" → { keyword: "freelance", txKind: "income" }
+ * Retorna null quando a mensagem tem valor numérico (provavelmente novo registro).
+ */
+export function detectSettleIntent(message: string): SettleIntent | null {
+  const text = normalizeFreeText(message);
+  if (!text) return null;
+
+  // Se tem valor numérico, é provável registro novo — não baixa
+  if (parseLooseAmount(text) != null) return null;
+
+  const STOP_WORDS = /\b(o|a|os|as|meu|minha|meus|minhas|um|uma|meu|do|da|de)\b/g;
+
+  const expenseMatch = /\b(paguei|quitei|liquidei|ja paguei|ja quitei|marquei como pago)\b/.exec(text);
+  if (expenseMatch) {
+    const keyword = text
+      .replace(/\b(paguei|quitei|liquidei|ja paguei|ja quitei|marquei como pago)\b/, " ")
+      .replace(STOP_WORDS, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (keyword.length >= 2) {
+      return { keyword, txKind: "expense" };
+    }
+  }
+
+  // "recebi" sem valor → dar baixa em recebível (não confundir com consulta "quanto recebi")
+  const incomeMatch = /\b(recebi|ja recebi|confirmei recebimento)\b/.exec(text);
+  if (incomeMatch && !text.includes("quanto") && !text.includes("valor")) {
+    const keyword = text
+      .replace(/\b(recebi|ja recebi|confirmei recebimento)\b/, " ")
+      .replace(STOP_WORDS, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (keyword.length >= 2) {
+      return { keyword, txKind: "income" };
+    }
+  }
+
+  return null;
+}
+
+export async function settlePlannedTransactionByKeyword(
+  userId: string,
+  keyword: string,
+  txKind: "income" | "expense"
+): Promise<{ settled: boolean; description: string | null }> {
+  const type = txKind === "income" ? "income" : "expense";
+
+  const { data, error } = await supabase
+    .from("planned_transactions")
+    .select("id, description")
+    .eq("user_id", userId)
+    .eq("type", type)
+    .eq("status", "pending")
+    .ilike("description", `%${keyword}%`)
+    .order("due_date", { ascending: true })
+    .limit(1);
+
+  if (error) {
+    throw new Error(`Failed to find planned transaction: ${error.message}`);
+  }
+
+  if (!data || data.length === 0) {
+    return { settled: false, description: null };
+  }
+
+  const tx = data[0] as { id: string; description: string };
+
+  const { error: updateError } = await supabase
+    .from("planned_transactions")
+    .update({ status: "done", updated_at: new Date().toISOString() })
+    .eq("id", tx.id);
+
+  if (updateError) {
+    throw new Error(`Failed to settle planned transaction: ${updateError.message}`);
+  }
+
+  return { settled: true, description: tx.description };
 }
 
 export async function fetchPlannedForecastSummary(

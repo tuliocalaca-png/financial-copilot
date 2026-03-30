@@ -18,7 +18,12 @@ import {
 type ActualQueryType = "expense" | "income" | "balance" | "daily_limit";
 type ForecastQueryType = "payable" | "receivable" | "projected_balance";
 import { parseBudgetSettingsCommand, type BudgetCommandResult } from "./budget-settings.service";
-import { parsePlannedTransaction, type PlannedTransaction } from "./planned-transaction.service";
+import {
+  parsePlannedTransaction,
+  detectSettleIntent,
+  type PlannedTransaction,
+  type SettleIntent
+} from "./planned-transaction.service";
 import { normalizeFreeText } from "./transaction-helpers";
 
 function countNumericAmountLikeTokens(message: string): number {
@@ -128,6 +133,7 @@ export type InboundResolution =
       kind: "planned_transaction_missing_amount";
       reply: string;
     }
+  | (SettleIntent & { kind: "planned_transaction_settle" })
   | {
       kind: "forecast_query";
       queryType: Extract<QueryType, "payable" | "receivable" | "projected_balance">;
@@ -161,6 +167,11 @@ export async function resolveInboundMessage(userId: string, message: string): Pr
 
   if (detectActualQueryType(trimmed) === "daily_limit") {
     return { kind: "daily_limit_query" };
+  }
+
+  const settleIntent = detectSettleIntent(trimmed);
+  if (settleIntent) {
+    return { kind: "planned_transaction_settle", ...settleIntent };
   }
 
   const planned = parsePlannedTransaction(trimmed);

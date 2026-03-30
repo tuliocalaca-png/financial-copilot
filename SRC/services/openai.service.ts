@@ -1,10 +1,22 @@
 import { DailyLimitResult } from "../core/types";
+import type { PlannedTransaction } from "./planned-transaction.service";
 
 type Aggregate = {
   totalExpenses: number;
   totalIncome: number;
   balance: number;
 };
+
+function brl(value: number): string {
+  return `R$ ${value.toFixed(2).replace(".", ",")}`;
+}
+
+function dueDateLabel(isoDate: string): string {
+  // "2024-03-05" → "05/03"
+  const parts = isoDate.split("-");
+  if (parts.length < 3) return isoDate;
+  return `${parts[2]}/${parts[1]}`;
+}
 
 export function formatSpendingResponse(params: {
   periodLabel: string;
@@ -15,64 +27,92 @@ export function formatSpendingResponse(params: {
   const { periodLabel, aggregate } = params;
 
   return `📊 ${periodLabel}
-Entradas: R$ ${aggregate.totalIncome.toFixed(2)}
-Saídas: R$ ${aggregate.totalExpenses.toFixed(2)}
-Saldo: R$ ${aggregate.balance.toFixed(2)}`;
+Entradas: ${brl(aggregate.totalIncome)}
+Saídas: ${brl(aggregate.totalExpenses)}
+Saldo: ${brl(aggregate.balance)}`;
 }
 
 // =========================
-// 🆕 DAILY LIMIT
+// 💰 DAILY LIMIT
 // =========================
-export function formatDailyLimitResponse(
-  result: DailyLimitResult
-): string {
-  if (!result.isEnabled) {
-    return "Você não tem limite diário ativo.";
+export function formatDailyLimitResponse(result: DailyLimitResult): string {
+  if (result.noBudgetSet) {
+    return (
+      "Ainda não configurei seu orçamento mensal 📋\n\n" +
+      "Me manda o valor para eu calcular quanto você pode gastar por dia:\n" +
+      "\"meu orçamento é 3000\""
+    );
   }
 
-  return `📊 Limite diário
-Modo: ${result.mode}
-Restante no mês: R$ ${result.remainingMonthBudget.toFixed(2)}
-Dias restantes: ${result.remainingDaysInMonth}
-Pode gastar hoje: R$ ${result.dailyLimit.toFixed(2)}`;
+  if (!result.isEnabled) {
+    return "Você não tem orçamento mensal ativo.\n\nPara ativar: \"meu orçamento é 3000\"";
+  }
+
+  const availableToday = Math.max(result.dailyLimit - result.spentToday, 0);
+
+  return [
+    `💰 Limite diário`,
+    `Orçamento mensal: ${brl(result.monthlyBudget)}`,
+    `Gasto no mês: ${brl(result.totalSpentMonth)}`,
+    `Restante no mês: ${brl(result.remainingMonthBudget)}`,
+    `Dias restantes: ${result.remainingDaysInMonth}`,
+    ``,
+    `Pode gastar hoje: ${brl(result.dailyLimit)}`,
+    `Gasto hoje: ${brl(result.spentToday)}`,
+    `Disponível hoje: ${brl(availableToday)}`
+  ].join("\n");
 }
 
 // =========================
-// 🆕 FORECAST
+// 📅 FORECAST
 // =========================
 export function formatForecastResponse(params: {
   queryType: "payable" | "receivable" | "projected_balance";
-  planned: any[];
+  planned: PlannedTransaction[];
   periodLabel: string;
+  realBalance?: number;
 }): string {
-  const { queryType, planned, periodLabel } = params;
+  const { queryType, planned, periodLabel, realBalance } = params;
 
-  const totalIncome = planned
-    .filter((p) => p.type === "income")
-    .reduce((sum, p) => sum + p.amount, 0);
+  const receivables = planned.filter((p) => p.kind === "income");
+  const payables = planned.filter((p) => p.kind === "expense");
 
-  const totalExpense = planned
-    .filter((p) => p.type === "expense")
-    .reduce((sum, p) => sum + p.amount, 0);
+  const totalReceivable = receivables.reduce((s, p) => s + p.amount, 0);
+  const totalPayable = payables.reduce((s, p) => s + p.amount, 0);
+
+  function itemLines(items: PlannedTransaction[]): string {
+    if (items.length === 0) return "  (nenhuma)";
+    return items
+      .map((p) => `  • ${p.description} — ${brl(p.amount)} (vence ${dueDateLabel(p.dueDate)})`)
+      .join("\n");
+  }
 
   if (queryType === "receivable") {
-    return `📅 A receber (${periodLabel})
-Total: R$ ${totalIncome.toFixed(2)}`;
+    return [
+      `📅 A receber (${periodLabel})`,
+      itemLines(receivables),
+      `Total: ${brl(totalReceivable)}`
+    ].join("\n");
   }
 
   if (queryType === "payable") {
-    return `📅 A pagar (${periodLabel})
-Total: R$ ${totalExpense.toFixed(2)}`;
+    return [
+      `📅 A pagar (${periodLabel})`,
+      itemLines(payables),
+      `Total: ${brl(totalPayable)}`
+    ].join("\n");
   }
 
-  if (queryType === "projected_balance") {
-    const balance = totalIncome - totalExpense;
+  // projected_balance
+  const real = realBalance ?? 0;
+  const projected = real + totalReceivable - totalPayable;
 
-    return `📊 Saldo projetado (${periodLabel})
-Entradas futuras: R$ ${totalIncome.toFixed(2)}
-Saídas futuras: R$ ${totalExpense.toFixed(2)}
-Saldo: R$ ${balance.toFixed(2)}`;
-  }
-
-  return "Não consegui calcular.";
+  return [
+    `📊 Saldo projetado (${periodLabel})`,
+    `Saldo real: ${brl(real)}`,
+    `+ A receber: ${brl(totalReceivable)}`,
+    `- A pagar: ${brl(totalPayable)}`,
+    `─────────────`,
+    `Projeção: ${brl(projected)}`
+  ].join("\n");
 }
